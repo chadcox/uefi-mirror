@@ -20,6 +20,27 @@ from uefi_mirror.collectors import efivarfs  # noqa: E402
 
 PROD_FILES = [p for p in SRC.rglob("*.py")]
 
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _run_cli(*args, check=False):
+    """Run the CLI in a subprocess with deterministic output.
+
+    Rich decides it is on a colour terminal when it sees GITHUB_ACTIONS, and
+    then splices escape codes into option names (`--output` renders as
+    `\x1b[1;36m-\x1b[0m\x1b[1;36m-output\x1b[0m`), which breaks plain text
+    assertions on CI but not locally. Pin the width, ask for no colour, and
+    strip anything that survives.
+    """
+    env = {**os.environ, "PYTHONPATH": str(SRC), "COLUMNS": "200",
+           "NO_COLOR": "1", "TERM": "dumb"}
+    env.pop("FORCE_COLOR", None)
+    proc = subprocess.run([sys.executable, "-m", "uefi_mirror.cli", *args],
+                          capture_output=True, text=True, check=check, env=env)
+    proc.stdout = ANSI.sub("", proc.stdout)
+    proc.stderr = ANSI.sub("", proc.stderr)
+    return proc
+
 # ---------------------------------------------------------------- static scans
 
 MUTATING_CALLS = {
@@ -123,9 +144,7 @@ def test_read_flags_are_hardened():
 
 
 def test_cli_exposes_no_mutating_command():
-    out = subprocess.run([sys.executable, "-m", "uefi_mirror.cli", "--help"],
-                         capture_output=True, text=True, check=True,
-                         env={**os.environ, "PYTHONPATH": str(SRC), "COLUMNS": "200"}).stdout
+    out = _run_cli("--help", check=True).stdout
     for word in ("set", "write", "restore", "flash", "unlock", "erase", "modify"):
         assert not re.search(rf"^\s+{word}\b", out, re.M | re.I), f"mutating command: {word}"
 
@@ -187,9 +206,7 @@ def test_private_write_retries_partial_os_writes():
 
 
 def test_cli_rejects_negative_limits():
-    proc = subprocess.run(
-        [sys.executable, "-m", "uefi_mirror.cli", "schema", "missing.CAP", "--limit", "-1"],
-        capture_output=True, text=True, env={**os.environ, "PYTHONPATH": str(SRC)})
+    proc = _run_cli("schema", "missing.CAP", "--limit", "-1")
     assert proc.returncode == 2
     assert "Invalid value" in proc.stderr
 
@@ -206,12 +223,11 @@ def test_html_export_keeps_all_settings_and_private_permissions():
         (efivars / f"Setup-{fixtures.VARSTORE_GUID}").write_bytes(
             b"\x07\x00\x00\x00" + payload)
         output = tmp_path / "bios.html"
-        proc = subprocess.run([
-            sys.executable, "-m", "uefi_mirror.cli", "export", str(image),
-            "--efivars", str(efivars), "--format", "html", "--output", str(output),
+        proc = _run_cli(
+            "export", str(image), "--efivars", str(efivars),
+            "--format", "html", "--output", str(output),
             "--grep", "does not match", "--changed-only", "--visible-only",
-            "--include-inactive",
-        ], capture_output=True, text=True, env={**os.environ, "PYTHONPATH": str(SRC)})
+            "--include-inactive")
 
         assert proc.returncode == 0, proc.stderr
         html = output.read_text()
@@ -229,10 +245,7 @@ def test_html_export_keeps_all_settings_and_private_permissions():
 
 
 def test_html_export_requires_output_before_reading_image():
-    proc = subprocess.run([
-        sys.executable, "-m", "uefi_mirror.cli", "export", "missing.CAP",
-        "--format", "html",
-    ], capture_output=True, text=True, env={**os.environ, "PYTHONPATH": str(SRC)})
+    proc = _run_cli("export", "missing.CAP", "--format", "html")
     assert proc.returncode == 2
     assert "--output is required when --format html" in proc.stderr
 
