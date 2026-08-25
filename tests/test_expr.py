@@ -6,8 +6,8 @@ import struct
 
 import pytest
 
-from uefi_mirror.firmware import expr
 from tests.fixtures import _op
+from uefi_mirror.firmware import expr
 
 
 class Values(expr.Resolver):

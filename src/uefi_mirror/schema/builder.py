@@ -2,8 +2,16 @@
 
 from ..firmware import hii, ifr
 from ..firmware.firmware_volume import FfsFile
-from .model import TYPE_BY_OPCODE_KIND, ConditionRef, FormSetSummary, OptionValue
-from .model import Schema, Setting, VarStoreInfo, VarStoreRef
+from .model import (
+    TYPE_BY_OPCODE_KIND,
+    ConditionRef,
+    FormSetSummary,
+    OptionValue,
+    Schema,
+    Setting,
+    VarStoreInfo,
+    VarStoreRef,
+)
 
 QUESTION_FLAG_READ_ONLY = 0x01
 DISPLAY_NAMES = {ifr.DISPLAY_UINT_DEC: "dec", ifr.DISPLAY_UINT_HEX: "hex",

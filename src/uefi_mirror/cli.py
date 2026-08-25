@@ -8,7 +8,8 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from . import __version__, decode, diff as diff_mod, platform, report
+from . import __version__, decode, platform, report
+from . import diff as diff_mod
 from .collectors import efivarfs
 from .firmware import cap, firmware_volume
 from .safety import private_dir, write_private

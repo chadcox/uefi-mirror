@@ -4,9 +4,8 @@ import os
 
 import pytest
 
-from uefi_mirror import decode
 from tests import fixtures
-
+from uefi_mirror import decode
 
 GUID = str(fixtures.VARSTORE_GUID)
 FILENAME = f"Setup-{GUID}"

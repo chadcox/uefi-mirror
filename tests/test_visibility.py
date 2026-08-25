@@ -1,11 +1,11 @@
 """Whether the firmware would actually show a setting, and which per-CPU-family
 form set applies. Both decide what a user is told about their own machine."""
 
+from tests import fixtures
 from uefi_mirror import decode
 from uefi_mirror.firmware import firmware_volume
 from uefi_mirror.schema import builder
 from uefi_mirror.schema.model import FormSetSummary
-from tests import fixtures
 
 
 def _schema():

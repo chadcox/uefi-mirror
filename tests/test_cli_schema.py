@@ -9,10 +9,9 @@ import json
 import pytest
 from typer.testing import CliRunner
 
+from tests import fixtures
 from uefi_mirror import decode
 from uefi_mirror.cli import app
-from tests import fixtures
-
 
 runner = CliRunner()
 GUID = str(fixtures.VARSTORE_GUID)

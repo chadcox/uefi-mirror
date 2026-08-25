@@ -8,8 +8,8 @@ Read-only: variables are read through the efivarfs collector or from a
 snapshot directory. Nothing here writes to firmware.
 """
 
-import json
 import hashlib
+import json
 import os
 import string
 import uuid

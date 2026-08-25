@@ -1,10 +1,10 @@
 """Comparing two configurations. A diff that misses a change, or invents one,
 is worse than no diff at all."""
 
+from tests import fixtures
 from uefi_mirror import decode, diff
 from uefi_mirror.firmware import firmware_volume
 from uefi_mirror.schema import builder
-from tests import fixtures
 
 GUID = str(fixtures.VARSTORE_GUID)
 

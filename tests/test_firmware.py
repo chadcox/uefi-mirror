@@ -1,9 +1,10 @@
-import json
 import hashlib
+import json
 import re
 import struct
 import uuid
 
+import fixtures
 import pytest
 
 from uefi_mirror import decode, report
@@ -11,8 +12,6 @@ from uefi_mirror.firmware import cap, firmware_volume, hii, ifr
 from uefi_mirror.firmware.strings import parse_string_package
 from uefi_mirror.schema import builder
 from uefi_mirror.schema.model import Setting, VarStoreRef
-
-import fixtures
 
 
 def test_capsule_header_is_stripped(tmp_path):

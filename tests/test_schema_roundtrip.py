@@ -6,11 +6,11 @@ import json
 
 import pytest
 
+from tests import fixtures
 from uefi_mirror import decode
 from uefi_mirror.firmware import firmware_volume
 from uefi_mirror.schema import builder
 from uefi_mirror.schema.model import Schema, canonical_json, schema_hash
-from tests import fixtures
 
 
 def _schema(ifr=None):

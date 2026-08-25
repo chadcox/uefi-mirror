@@ -32,3 +32,8 @@ testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100
+
+[tool.ruff.lint]
+# Name the rules. Ruff's implicit default set changes between releases, and a
+# CI lint that fails on style the repo never opted into is just noise.
+select = ["E4", "E7", "E9", "F", "I", "W"]
