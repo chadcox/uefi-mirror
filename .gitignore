@@ -1,0 +1,26 @@
+# Never commit proprietary firmware or raw host NVRAM.
+*.CAP
+*.cap
+*.bin
+*.fd
+snapshot/
+profile/
+raw-variables/
+schema-*.json
+__pycache__/
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+before/
+bios-images/
+bios.json
+bios.txt
+
+# Working notes and plans stay local; only the safety contract ships.
+docs/*
+!docs/safety.md
+
+# Agent instructions are local tooling, not part of the shipped project.
+CLAUDE.md
+AGENTS.md
