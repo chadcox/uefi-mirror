@@ -1,7 +1,7 @@
 [project]
 name = "uefi-mirror"
 version = "0.4.0"
-description = "Read-only Linux exporter for live UEFI/BIOS settings"
+description = "Read-only cross-platform exporter for live UEFI/BIOS settings"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -10,6 +10,7 @@ dependencies = ["typer>=0.12", "rich>=13"]
 classifiers = [
     "Environment :: Console",
     "Intended Audience :: System Administrators",
+    "Operating System :: Microsoft :: Windows",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3.12",
     "Topic :: System :: Hardware",

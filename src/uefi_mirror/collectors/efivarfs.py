@@ -90,8 +90,10 @@ def read_variable(directory: str, filename: str) -> Variable | None:
     return var
 
 
-def collect(directory: str = EFIVARS_DIR, require_mount: bool = True) -> list[Variable]:
+def collect(directory: str | None = EFIVARS_DIR, require_mount: bool = True) -> list[Variable]:
     """Read every variable. One unreadable entry never aborts the sweep."""
+    if directory is None:
+        raise RuntimeError("efivarfs is not available on this platform")
     if require_mount and not efivarfs_mounted():
         raise RuntimeError(f"{directory} is not an efivarfs mount")
     variables = []

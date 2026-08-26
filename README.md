@@ -1,13 +1,14 @@
 # uefi-mirror
 
-Read the current BIOS/UEFI configuration of a running Linux system and export it
-to the terminal, JSON, text, or HTML — without rebooting into firmware setup.
+Read the current BIOS/UEFI configuration of a running Linux or Windows system
+and export it to the terminal, JSON, text, or HTML — without rebooting into
+firmware setup.
 
-Linux exposes UEFI variables as opaque blobs: `AmdSetupRPL` is 2016 bytes of
-undocumented struct. The names, menu paths, options and defaults that make those
-bytes meaningful live only inside the BIOS image. `uefi-mirror` extracts that
-schema from a vendor BIOS update file, joins it to your machine's live
-variables, and tells you what your firmware is actually set to.
+The operating system exposes UEFI variables as opaque blobs: `AmdSetupRPL` is
+2016 bytes of undocumented struct. The names, menu paths, options and defaults
+that make those bytes meaningful live only inside the BIOS image. `uefi-mirror`
+extracts that schema from a vendor BIOS update file, joins it to your machine's
+live variables, and tells you what your firmware is actually set to.
 
 That schema can be saved once and reused: extract it to a JSON file on one
 machine, and every later `export` or `diff` — here or on another machine — can
@@ -57,8 +58,19 @@ Or run without installing:
 $ PYTHONPATH=src python3 -m uefi_mirror.cli probe
 ```
 
-No root required. Running unprivileged simply means some variables are
-unreadable, which `probe` reports rather than escalating.
+### Platform support
+
+| Host | Live-variable support |
+|---|---|
+| Linux, booted with UEFI | Reads `efivarfs`; root is normally unnecessary, though firmware permissions can hide individual variables. |
+| Windows, booted with UEFI | `probe` and offline work run normally. Live `snapshot`, `export`, and `diff` require an elevated Administrator terminal to enable `SeSystemEnvironmentPrivilege`. |
+| Legacy BIOS / CSM boot | Live UEFI-variable collection is unavailable. Image parsing and work with existing schemas or snapshots still work. |
+
+Windows full enumeration uses the undocumented
+`NtEnumerateSystemEnvironmentValuesEx` syscall because the documented firmware
+API can read only variables whose names are already known. If Windows or the
+host blocks that syscall, live collection stops with `enumeration unavailable`
+instead of returning a guessed or partial snapshot.
 
 ## Quick start
 
@@ -68,9 +80,10 @@ unreadable, which `probe` reports rather than escalating.
 $ uefi-mirror probe
 ```
 
-Confirm that the machine booted in UEFI mode, `efivarfs` is mounted, and note
-the exact board model, board revision, and firmware version. No root access is
-required; unreadable variables are reported rather than bypassed.
+Confirm that the machine booted in UEFI mode and note the exact board model,
+board revision, and firmware version. Linux also reports whether `efivarfs` is
+mounted. On Windows, `probe` explains whether the process needs elevation;
+rerun live commands from an elevated Administrator terminal when it does.
 
 ### 2. Obtain the matching firmware image
 
@@ -205,9 +218,10 @@ Snapshot: 134 variables -> before/
 ```
 
 Writes every readable variable plus a manifest with sizes, attributes and
-SHA-256. Directory `0700`, files `0600`. Feed it to `export --snapshot` or
-`diff` later. **Do not commit it** — raw variables contain boot paths and
-machine identifiers.
+SHA-256. Linux uses directory mode `0700` and file mode `0600`; Windows uses a
+verified, protected owner-only DACL. Feed it to `export --snapshot` or `diff`
+later. **Do not commit it** — raw variables contain boot paths and machine
+identifiers.
 
 ### `schema` — what does each setting *mean*?
 
@@ -273,10 +287,10 @@ Before decoding, `export` checks for an embedded board-model and BIOS-version
 match and validates the image's declared variable GUIDs, minimum sizes, and enum
 values against the live machine.
 
-All outputs are created `0600`. `--grep`, `--changed-only`, `--visible-only`,
-and `--include-inactive` filter terminal and text rows; archival JSON remains
-complete. HTML embeds every setting and uses those flags only as initial UI
-filters.
+All outputs use `0600` on Linux or a verified owner-only DACL on Windows.
+`--grep`, `--changed-only`, `--visible-only`, and `--include-inactive` filter
+terminal and text rows; archival JSON remains complete. HTML embeds every
+setting and uses those flags only as initial UI filters.
 
 ### `diff` — what changed?
 
@@ -423,6 +437,9 @@ BIOS.CAP ──▶ capsule ──▶ firmware volumes ──▶ HII packages ─
                                         expression evaluation ──▶ export / diff
 ```
 
+On Windows, the native firmware APIs replace the `efivarfs` input shown above;
+the schema, decode, export, and diff pipeline is shared.
+
 | Stage | Module | Job |
 |---|---|---|
 | Capsule | `firmware/cap.py` | Strip the update header, find the payload |
@@ -462,14 +479,20 @@ BIOS.CAP ──▶ capsule ──▶ firmware volumes ──▶ HII packages ─
   compatibility line reports how many declared varstores were readable. On the
   reference board every setup store carries `NV+BS+RT` and is readable
   unprivileged.
+- Windows enumeration relies on an undocumented syscall and may be unavailable
+  on future Windows releases or restricted hosts. The documented named-read API
+  remains usable only when the caller already knows a variable's name and GUID.
 
 ## Tests
 
 ```console
 $ pytest
-$ python3 tests/test_safety.py  # safety suite, no pytest needed
+$ python tests/test_safety.py  # safety suite, no pytest needed
 $ ruff check .
 ```
 
-No root, no network, and never touches the host's real efivarfs — fixtures build
-a miniature UEFI image in memory instead of shipping a vendor BIOS.
+CI runs this suite on `ubuntu-latest` and `windows-latest`, including native
+Windows DACL and junction checks. It does not read the runner's real firmware
+variables: hosted runners can restrict that access, so enumeration parsing uses
+synthetic buffers. Tests need no root or Administrator access and no network,
+and never touch the host's real firmware-variable store.

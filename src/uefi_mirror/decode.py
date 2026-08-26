@@ -47,6 +47,12 @@ SNAPSHOT_RAW_DIR = "raw-variables"
 SNAPSHOT_FORMAT_VERSION = 1
 
 
+# Store kinds that mean "these bytes came off the machine running this command".
+# Anything not listed here is a recording of some other machine, so facts about
+# the local host must not be attached to it. Windows collectors join this set.
+LIVE_KINDS = frozenset({"efivarfs", "windows-firmware"})
+
+
 @dataclass
 class VariableStore:
     """Variable payloads keyed by (name, lowercased GUID)."""
@@ -56,6 +62,7 @@ class VariableStore:
     source: str = ""
     errors: list[str] = field(default_factory=list)
     platform: dict = field(default_factory=dict)
+    kind: str = ""
 
     def get(self, name: str, guid: str) -> bytes | None:
         return self.payloads.get((name, guid.lower()))
@@ -68,9 +75,15 @@ class VariableStore:
                 "errors": self.errors}
 
 
-def from_efivarfs(directory: str, require_mount: bool = True) -> VariableStore:
-    store = VariableStore(source=directory)
-    for var in efivarfs.collect(directory, require_mount=require_mount):
+def from_variables(variables: list[efivarfs.Variable], source: str,
+                   kind: str) -> VariableStore:
+    """Fold collected variables into a store.
+
+    Every collector shares this mapping so a second platform cannot drift into
+    a subtly different key or error format.
+    """
+    store = VariableStore(source=source, kind=kind)
+    for var in variables:
         if var.payload is None:
             store.errors.append(f"{var.filename}: {var.error}")
             continue
@@ -79,9 +92,14 @@ def from_efivarfs(directory: str, require_mount: bool = True) -> VariableStore:
     return store
 
 
+def from_efivarfs(directory: str, require_mount: bool = True) -> VariableStore:
+    return from_variables(efivarfs.collect(directory, require_mount=require_mount),
+                          directory, "efivarfs")
+
+
 def from_snapshot(directory: str) -> VariableStore:
     """Read a directory produced by `uefi-mirror snapshot`."""
-    store = VariableStore(source=directory)
+    store = VariableStore(source=directory, kind="snapshot")
     manifest_path = os.path.join(directory, SNAPSHOT_MANIFEST)
     try:
         manifest = json.loads(read_bounded(manifest_path, 64 << 20).decode())

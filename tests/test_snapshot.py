@@ -1,11 +1,13 @@
 import hashlib
 import json
 import os
+import subprocess
 
 import pytest
 
 from tests import fixtures
-from uefi_mirror import decode
+from uefi_mirror import cli, decode, platform
+from uefi_mirror.collectors.efivarfs import Variable
 
 GUID = str(fixtures.VARSTORE_GUID)
 FILENAME = f"Setup-{GUID}"
@@ -45,9 +47,15 @@ def test_snapshot_rejects_invalid_payload_metadata(tmp_path, changes, match):
 def test_snapshot_rejects_symlink_payload(tmp_path):
     _snapshot(tmp_path)
     target = tmp_path / "target"
-    target.write_bytes(b"payload")
     os.unlink(tmp_path / "raw-variables" / FILENAME)
-    os.symlink(target, tmp_path / "raw-variables" / FILENAME)
+    link = tmp_path / "raw-variables" / FILENAME
+    if os.name == "nt":
+        target.mkdir()
+        subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(target)],
+                       check=True, capture_output=True)
+    else:
+        target.write_bytes(b"payload")
+        os.symlink(target, link)
     with pytest.raises(ValueError, match="unreadable payload"):
         decode.from_snapshot(str(tmp_path))
 
@@ -76,3 +84,50 @@ def test_missing_payload_is_allowed_only_for_collection_error(tmp_path):
     store = decode.from_snapshot(str(tmp_path))
     assert store.payloads == {}
     assert store.errors
+
+
+def _boom(*_args, **_kwargs):
+    raise AssertionError("read the local machine's DMI while inspecting a snapshot")
+
+
+def test_snapshot_without_dmi_does_not_borrow_local_dmi(tmp_path, monkeypatch):
+    """A snapshot missing DMI yields no evidence, not this machine's evidence."""
+    _snapshot(tmp_path)
+    monkeypatch.setattr(platform, "dmi", _boom)
+    store = decode.from_snapshot(str(tmp_path))
+    assert cli._dmi_for(store) == {}
+
+
+def test_snapshot_dmi_is_preferred_over_local(tmp_path, monkeypatch):
+    manifest = _snapshot(tmp_path)
+    manifest["platform"] = {"dmi": {"board_name": "RECORDED-B550"}}
+    (tmp_path / "manifest.json").write_text(json.dumps(manifest))
+    monkeypatch.setattr(platform, "dmi", _boom)
+    store = decode.from_snapshot(str(tmp_path))
+    assert cli._dmi_for(store) == {"board_name": "RECORDED-B550"}
+
+
+def test_live_store_still_reads_local_dmi(monkeypatch):
+    monkeypatch.setattr(platform, "dmi", lambda: {"board_name": "LOCAL-X570"})
+    store = decode.VariableStore(source="/sys/firmware/efi/efivars", kind="efivarfs")
+    assert cli._dmi_for(store) == {"board_name": "LOCAL-X570"}
+
+
+def test_windows_live_store_dispatches_to_windows_collector(monkeypatch):
+    variable = Variable("SecureBoot", GUID, FILENAME, attributes=7, payload=b"\x01")
+    monkeypatch.setattr(platform, "WINDOWS", True)
+    monkeypatch.setattr(cli.windows, "collect", lambda: [variable])
+    monkeypatch.setattr(cli.efivarfs, "collect", _boom)
+
+    store = cli._live_store(None)
+
+    assert store.source == store.kind == cli.WINDOWS_FIRMWARE
+    assert store.get("SecureBoot", GUID) == b"\x01"
+    assert store.kind in decode.LIVE_KINDS
+
+    monkeypatch.setattr(cli.windows, "collect", _boom)
+    monkeypatch.setattr(
+        cli.efivarfs, "collect", lambda directory, require_mount: [variable])
+    fixture_store = cli._live_store("fixture-efivars")
+    assert fixture_store.source == "fixture-efivars"
+    assert fixture_store.kind == "efivarfs"

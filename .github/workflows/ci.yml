@@ -11,10 +11,11 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, windows-latest]
         python-version: ["3.12", "3.13"]
 
     steps:
@@ -36,7 +37,7 @@ jobs:
       # first and also standalone: test_safety.py runs without pytest and
       # without root, exactly as a reviewer would run it from a clone.
       - name: Safety contract (standalone)
-        run: python3 tests/test_safety.py
+        run: python tests/test_safety.py
 
       - name: Tests
         run: pytest -q

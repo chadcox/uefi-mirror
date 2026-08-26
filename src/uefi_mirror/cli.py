@@ -10,7 +10,7 @@ from rich.table import Table
 
 from . import __version__, decode, platform, report
 from . import diff as diff_mod
-from .collectors import efivarfs
+from .collectors import efivarfs, windows
 from .firmware import cap, firmware_volume
 from .safety import private_dir, write_private
 from .schema import builder
@@ -20,17 +20,49 @@ app = typer.Typer(add_completion=False, help="Export live UEFI/BIOS settings, re
 console = Console()
 
 SNAPSHOT_FORMAT_VERSION = decode.SNAPSHOT_FORMAT_VERSION
+WINDOWS_FIRMWARE = "windows-firmware"
 
 
 def _now() -> str:
     return datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _windows_live(efivars: str | None) -> bool:
+    return platform.WINDOWS and efivars is None
+
+
 def _dmi_for(store: decode.VariableStore) -> dict[str, str]:
+    """DMI facts to judge a schema against, drawn from the right machine.
+
+    A snapshot carries the DMI of the host it was taken on. If it does not, the
+    answer is "no evidence", never the local host's DMI: the user is asking
+    about the recorded machine, and borrowing this one's board name would
+    manufacture a match (or a mismatch) out of an unrelated computer.
+    """
     saved = store.platform.get("dmi")
     if isinstance(saved, dict):
         return {key: value for key, value in saved.items() if isinstance(value, str)}
-    return platform.dmi()
+    if store.kind in decode.LIVE_KINDS:
+        return platform.dmi()
+    return {}
+
+
+def _live_variables(efivars: str | None) -> list[efivarfs.Variable]:
+    """Collect variables from the running machine.
+
+    The mount check is enforced only for the real efivarfs path; pointing
+    --efivars elsewhere is how tests aim the collector at a fixture directory.
+    """
+    if _windows_live(efivars):
+        return windows.collect()
+    return efivarfs.collect(efivars, require_mount=efivars == platform.EFIVARS_DIR)
+
+
+def _live_store(efivars: str | None) -> decode.VariableStore:
+    source = WINDOWS_FIRMWARE if _windows_live(efivars) else efivars
+    return decode.from_variables(
+        _live_variables(efivars), source,
+        WINDOWS_FIRMWARE if _windows_live(efivars) else "efivarfs")
 
 
 def _load_schema(image: str | None,
@@ -86,13 +118,19 @@ def probe() -> None:
     """Report platform, firmware and tool availability. Changes nothing."""
     info = platform.summary()
     dmi = info["dmi"]
+    boot = info["uefi_boot"]
 
     table = Table(show_header=False, box=None)
-    table.add_row("Boot mode", "UEFI" if info["uefi_boot"] else "LEGACY (BIOS)")
+    table.add_row("Boot mode", "UEFI" if boot is True else
+                  "LEGACY (BIOS)" if boot is False else "UNKNOWN")
     table.add_row("Board", f"{dmi.get('board_vendor', '?')} {dmi.get('board_name', '?')}")
     table.add_row("Firmware", f"{dmi.get('bios_vendor', '?')} {dmi.get('bios_version', '?')}"
                               f" ({dmi.get('bios_date', '?')})")
-    table.add_row("efivarfs", "mounted" if info["efivarfs_mounted"] else "NOT mounted")
+    capability = info.get("firmware_variables")
+    if capability:
+        table.add_row("Firmware variables", capability["message"])
+    else:
+        table.add_row("efivarfs", "mounted" if info["efivarfs_mounted"] else "NOT mounted")
 
     if info["efivarfs_mounted"]:
         try:
@@ -112,8 +150,9 @@ def probe() -> None:
     tools = info["optional_tools"]
     table.add_row("Optional tools",
                   "\n".join(f"{k}: {v}" for k, v in tools.items()) if tools else "none installed")
-    table.add_row("Privileges", "root" if info["euid"] == 0 else f"uid {info['euid']}"
-                                " (some variables may be unreadable)")
+    if info["euid"] is not None:
+        table.add_row("Privileges", "root" if info["euid"] == 0 else f"uid {info['euid']}"
+                                    " (some variables may be unreadable)")
     console.print(table)
 
 
@@ -123,8 +162,7 @@ def snapshot(
     efivars: str = typer.Option(platform.EFIVARS_DIR, "--efivars", hidden=True),
 ) -> None:
     """Copy every readable UEFI variable into a private directory."""
-    require_mount = efivars == platform.EFIVARS_DIR
-    variables = efivarfs.collect(efivars, require_mount=require_mount)
+    variables = _live_variables(efivars)
 
     private_dir(output)
     raw_dir = private_dir(os.path.join(output, "raw-variables"))
@@ -137,7 +175,7 @@ def snapshot(
         "format_version": SNAPSHOT_FORMAT_VERSION,
         "tool_version": __version__,
         "collected_at": _now(),
-        "source": efivars,
+        "source": WINDOWS_FIRMWARE if _windows_live(efivars) else efivars,
         "platform": platform.summary(),
         "variables": [v.manifest() for v in variables],
     }
@@ -248,7 +286,7 @@ def export(
         if snapshot_dir:
             store = decode.from_snapshot(snapshot_dir)
         else:
-            store = decode.from_efivarfs(efivars, require_mount=efivars == platform.EFIVARS_DIR)
+            store = _live_store(efivars)
     except (OSError, ValueError, RuntimeError) as exc:
         raise typer.BadParameter(str(exc)) from exc
 
@@ -341,7 +379,7 @@ def diff(
 
     def load(where: str) -> decode.VariableStore:
         if where == "live":
-            return decode.from_efivarfs(efivars, require_mount=efivars == platform.EFIVARS_DIR)
+            return _live_store(efivars)
         return decode.from_snapshot(where)
 
     schema_result: Schema | None = None

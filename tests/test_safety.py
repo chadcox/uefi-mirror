@@ -138,8 +138,9 @@ def test_no_sys_firmware_path_is_ever_written():
 
 
 def test_read_flags_are_hardened():
-    assert safety.RO_FLAGS & os.O_NOFOLLOW
-    assert safety.RO_FLAGS & os.O_CLOEXEC
+    if os.name != "nt":
+        assert safety.RO_FLAGS & os.O_NOFOLLOW
+        assert safety.RO_FLAGS & os.O_CLOEXEC
     assert safety.RO_FLAGS & (os.O_WRONLY | os.O_RDWR) == 0
 
 
@@ -152,6 +153,18 @@ def test_cli_exposes_no_mutating_command():
 
 def test_symlink_is_refused():
     with tempfile.TemporaryDirectory() as d:
+        if os.name == "nt":
+            target = os.path.join(d, "real")
+            link = os.path.join(d, "link")
+            os.makedirs(target)
+            subprocess.run(["cmd", "/c", "mklink", "/J", link, target],
+                           check=True, capture_output=True)
+            try:
+                safety.private_dir(link)
+                raise AssertionError("directory junction was followed")
+            except OSError as exc:
+                assert exc.errno == 40, exc  # ELOOP
+            return
         target = os.path.join(d, "real")
         open(target, "wb").write(b"\x07\x00\x00\x00payload")
         link = os.path.join(d, "link")
@@ -180,10 +193,16 @@ def test_output_permissions_are_private():
         os.makedirs(out)
         os.chmod(out, 0o777)
         safety.private_dir(out)
-        assert oct(os.stat(out).st_mode & 0o777) == "0o700"
+        if os.name == "nt":
+            assert safety._windows_acl_is_private(out)
+        else:
+            assert oct(os.stat(out).st_mode & 0o777) == "0o700"
         f = os.path.join(out, "x")
         safety.write_private(f, b"secret")
-        assert oct(os.stat(f).st_mode & 0o777) == "0o600"
+        if os.name == "nt":
+            assert safety._windows_acl_is_private(f)
+        else:
+            assert oct(os.stat(f).st_mode & 0o777) == "0o600"
 
 
 def test_private_write_retries_partial_os_writes():
@@ -203,6 +222,28 @@ def test_private_write_retries_partial_os_writes():
             safety.os.write = real_write
         assert open(path, "rb").read() == b"abcdef"
         assert len(calls) == 3
+
+
+def test_windows_acl_failure_refuses_before_writing():
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "refused")
+        originals = safety.WINDOWS, safety._windows_fd, safety._set_windows_private_acl
+        safety.WINDOWS = True
+        safety._windows_fd = lambda *_args: os.open(path, os.O_WRONLY | os.O_CREAT, 0o600)
+
+        def refuse(_path):
+            raise PermissionError("ACL not private")
+
+        safety._set_windows_private_acl = refuse
+        try:
+            try:
+                safety.write_private(path, b"secret")
+                raise AssertionError("write continued after ACL failure")
+            except PermissionError:
+                pass
+            assert open(path, "rb").read() == b""
+        finally:
+            safety.WINDOWS, safety._windows_fd, safety._set_windows_private_acl = originals
 
 
 def test_cli_rejects_negative_limits():
@@ -241,7 +282,10 @@ def test_html_export_keeps_all_settings_and_private_permissions():
         assert filters == {"grep": "does not match", "changed_only": True,
                            "visible_only": True, "include_inactive": True}
         assert data["image"]["filename"] == "BIOS.CAP"
-        assert output.stat().st_mode & 0o777 == 0o600
+        if os.name == "nt":
+            assert safety._windows_acl_is_private(str(output))
+        else:
+            assert output.stat().st_mode & 0o777 == 0o600
 
 
 def test_html_export_requires_output_before_reading_image():
@@ -278,7 +322,8 @@ def test_end_to_end_on_a_fake_efivarfs():
         other = "Setup-4034591c-48ea-4cdc-864f-e7cb61cfd0f2"
         open(os.path.join(fake, other), "wb").write(b"\x06\x00\x00\x00\xff")
         open(os.path.join(fake, "garbage"), "wb").write(b"nope")
-        os.symlink("/etc/passwd", os.path.join(fake, "Evil-" + GOOD.split("-", 1)[1]))
+        if os.name != "nt":
+            os.symlink("/etc/passwd", os.path.join(fake, "Evil-" + GOOD.split("-", 1)[1]))
 
         out = os.path.join(d, "snap")
         cli.snapshot.__wrapped__(output=out, efivars=fake) if hasattr(
