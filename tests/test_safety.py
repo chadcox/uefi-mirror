@@ -2,6 +2,7 @@
 No root, never touches the host's real efivarfs."""
 
 import ast
+import errno
 import json
 import os
 import pathlib
@@ -54,6 +55,15 @@ PATH_MUTATORS = {
     "touch", "chmod", "symlink_to", "hardlink_to",
 }
 FIRMWARE_TOOLS = {"efibootmgr", "flashrom", "chipsec_util", "fwupdtool", "fwupdmgr"}
+# Windows firmware setters reached through ctypes bypass the AST call scan
+# (they surface as getattr/attribute access, not a recognised call name), so
+# they are caught by a plain symbol scan instead.
+FIRMWARE_SETTER_SYMBOLS = (
+    "SetFirmwareEnvironmentVariableW", "SetFirmwareEnvironmentVariableExW",
+    "SetFirmwareEnvironmentVariableA", "NtSetSystemEnvironmentValueEx",
+)
+# The intended output mutations in safety.py; anything else there is a finding.
+SAFETY_ALLOWED_MUTATIONS = ("os.makedirs", "os.chmod", "writing os.open")
 
 
 def _call_name(node):
@@ -113,9 +123,31 @@ def test_production_mutation_is_confined_to_safety_helpers():
     for path in PROD_FILES:
         findings = _scan(path.read_text())
         if path.name == "safety.py":
+            # Not a blanket skip: safety.py may only contain the known output
+            # helpers. A stray os.replace or a new firmware setter still fails.
+            unexpected = [(line, message) for line, message in findings
+                          if not any(a in message for a in SAFETY_ALLOWED_MUTATIONS)]
+            assert not unexpected, "; ".join(f"{path}:{line}: {message}"
+                                             for line, message in unexpected)
             continue
         assert not findings, "; ".join(f"{path}:{line}: {message}"
                                        for line, message in findings)
+
+
+def test_no_firmware_setter_symbol_in_production():
+    for path in PROD_FILES:
+        text = path.read_text()
+        for symbol in FIRMWARE_SETTER_SYMBOLS:
+            assert symbol not in text, f"{path}: firmware setter {symbol}"
+
+
+def test_safe_component_rejects_traversal_and_reserved():
+    for good in ("Setup-ec87d643-eba4-4bb5-a1e5-3f3e36b20da9", "Boot0001", "a.b"):
+        assert safety.safe_component(good), good
+    for bad in ("", "..", ".", "a/b", "a\\b", "a:b", "a*b", "a?b", "a|b",
+                "a\x00b", "con", "NUL", "COM1", "LPT9", "AUX.txt", "trail.",
+                "trail ", "x" * 256):
+        assert not safety.safe_component(bad), bad
 
 
 def test_ast_guard_detects_every_banned_api_family():
@@ -163,7 +195,7 @@ def test_symlink_is_refused():
                 safety.private_dir(link)
                 raise AssertionError("directory junction was followed")
             except OSError as exc:
-                assert exc.errno == 40, exc  # ELOOP
+                assert exc.errno == errno.ELOOP, exc
             return
         target = os.path.join(d, "real")
         open(target, "wb").write(b"\x07\x00\x00\x00payload")
@@ -173,7 +205,7 @@ def test_symlink_is_refused():
             safety.read_bounded(link)
             raise AssertionError("symlink was followed")
         except OSError as exc:
-            assert exc.errno == 40, exc  # ELOOP
+            assert exc.errno == errno.ELOOP, exc
 
 
 def test_oversize_read_is_refused():

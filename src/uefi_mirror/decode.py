@@ -117,7 +117,10 @@ def from_snapshot(directory: str) -> VariableStore:
         raise ValueError(f"{manifest_path}: variables must be a list")
 
     raw_dir = os.path.join(directory, SNAPSHOT_RAW_DIR)
-    if os.path.islink(raw_dir) or not os.path.isdir(raw_dir):
+    # islink catches POSIX symlinks; isjunction catches the Windows equivalent a
+    # crafted snapshot could plant to redirect payload reads out of the tree.
+    if (os.path.islink(raw_dir) or os.path.isjunction(raw_dir)
+            or not os.path.isdir(raw_dir)):
         raise ValueError(f"{raw_dir}: raw variable directory is missing or unsafe")
     seen_keys: set[tuple[str, str]] = set()
     seen_filenames: set[str] = set()

@@ -82,6 +82,13 @@ def enable_privilege() -> None:
         close(token)
 
 
+def _errored(name: str, guid: str, message: str) -> Variable:
+    guid = guid.lower()
+    var = Variable(name=name, guid=guid, filename=f"{name}-{guid}")
+    var.error = message
+    return var
+
+
 def _variable(name: str, guid: str, attributes: int, payload: bytes) -> Variable:
     source = attributes.to_bytes(4, "little") + payload
     return Variable(
@@ -113,13 +120,10 @@ def read_variable(name: str, guid: str) -> Variable:
         if length or not error:
             return _variable(name, guid.lower(), attributes.value, buffer.raw[:length])
         if error != ERROR_INSUFFICIENT_BUFFER:
-            var = Variable(name=name, guid=guid.lower(), filename=f"{name}-{guid.lower()}")
-            var.error = f"OSError {error}: GetFirmwareEnvironmentVariableExW failed"
-            return var
+            return _errored(name, guid,
+                            f"OSError {error}: GetFirmwareEnvironmentVariableExW failed")
         size *= 2
-    var = Variable(name=name, guid=guid.lower(), filename=f"{name}-{guid.lower()}")
-    var.error = f"variable exceeds {MAX_VARIABLE_BYTES} byte limit"
-    return var
+    return _errored(name, guid, f"variable exceeds {MAX_VARIABLE_BYTES} byte limit")
 
 
 def _enumerate_raw() -> bytes:
@@ -169,7 +173,14 @@ def _parse_enumeration(raw: bytes) -> list[Variable]:
         name = name_bytes[:terminator].decode("utf-16-le", errors="replace")
         guid = str(uuid.UUID(bytes_le=raw[offset + 16:offset + 32]))
         start = offset + value_offset
-        variables.append(_variable(name, guid, attributes, raw[start:start + value_length]))
+        if value_length > MAX_VARIABLE_BYTES:
+            # Match named reads and snapshot reload: a payload over the limit is
+            # recorded as an error, never written, so a live snapshot cannot
+            # exceed what the same release will agree to reload.
+            variables.append(_errored(name, guid,
+                                      f"variable exceeds {MAX_VARIABLE_BYTES} byte limit"))
+        else:
+            variables.append(_variable(name, guid, attributes, raw[start:start + value_length]))
         if not next_offset:
             break
         offset += next_offset

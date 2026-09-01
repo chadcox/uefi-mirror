@@ -4,11 +4,33 @@ inside /sys/firmware. Enforced by tests/test_safety.py."""
 import ctypes
 import errno
 import os
+import re
 
 # efivarfs vars are kernel-capped well under this; the limit is belt-and-braces
 # against a hostile/buggy filesystem handing us an endless read.
 MAX_VARIABLE_BYTES = 1 << 20
 WINDOWS = os.name == "nt"
+
+# A firmware variable name is attacker-influenced on Windows (it comes back from
+# the firmware, not the OS), and snapshot writes it as a filename. Validate it as
+# a single, contained path component on BOTH platforms before it can name a file.
+_UNSAFE_COMPONENT = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+_RESERVED_NAMES = {"CON", "PRN", "AUX", "NUL",
+                   *(f"COM{i}" for i in range(1, 10)),
+                   *(f"LPT{i}" for i in range(1, 10))}
+
+
+def safe_component(name: str) -> bool:
+    """True if `name` is safe as one on-disk filename component on POSIX and
+    Windows: no separators or traversal, no NUL/control chars, no Windows
+    reserved name, no trailing dot or space (Windows strips those silently)."""
+    if not name or len(name) > 255 or name in (".", ".."):
+        return False
+    if _UNSAFE_COMPONENT.search(name):
+        return False
+    if name[-1] in ". ":
+        return False
+    return name.split(".", 1)[0].upper() not in _RESERVED_NAMES
 
 RO_FLAGS = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
 

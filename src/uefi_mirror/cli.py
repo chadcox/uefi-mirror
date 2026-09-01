@@ -12,7 +12,7 @@ from . import __version__, decode, platform, report
 from . import diff as diff_mod
 from .collectors import efivarfs, windows
 from .firmware import cap, firmware_volume
-from .safety import private_dir, write_private
+from .safety import private_dir, safe_component, write_private
 from .schema import builder
 from .schema.model import Schema, schema_hash
 
@@ -163,6 +163,13 @@ def snapshot(
 ) -> None:
     """Copy every readable UEFI variable into a private directory."""
     variables = _live_variables(efivars)
+
+    # A firmware-controlled name must never escape raw-variables. safe_component
+    # forbids separators and traversal, so a passing name joins to a contained
+    # path. Validate every payload up front: fail closed, don't write half a tree.
+    for var in variables:
+        if var.payload is not None and not safe_component(var.filename):
+            raise typer.BadParameter(f"unsafe firmware variable filename: {var.filename!r}")
 
     private_dir(output)
     raw_dir = private_dir(os.path.join(output, "raw-variables"))
