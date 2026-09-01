@@ -20,6 +20,7 @@ bios.txt
 # Working notes and plans stay local; only the safety contract ships.
 docs/*
 !docs/safety.md
+CHANGELOG.md
 
 # Agent instructions are local tooling, not part of the shipped project.
 CLAUDE.md
