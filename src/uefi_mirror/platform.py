@@ -138,10 +138,30 @@ def _capability(firmware_type: int, variable_error: int) -> dict[str, str]:
     return {"status": "ready", "message": "UEFI firmware variables are available"}
 
 
+def _enable_environment_privilege() -> None:
+    """Best-effort enable of SeSystemEnvironmentPrivilege for the probe.
+
+    Never raises: if the privilege is genuinely unavailable the firmware getter
+    fails and _capability reports needs_elevation. Enabling a privilege the token
+    already holds does not elevate — it only flips it from present to enabled,
+    which is exactly what an already-Administrator process needs to be classified
+    ready instead of being told to elevate again.
+    """
+    try:
+        # Lazy import: collectors.windows -> efivarfs -> platform would be a cycle.
+        from .collectors.windows import enable_privilege
+        enable_privilege()
+    except (OSError, PermissionError):
+        pass
+
+
 def firmware_capability() -> dict[str, str]:
     """Report whether Windows firmware variables can be read by this process."""
     try:
-        return _capability(_windows_firmware_type(), _windows_variable_error())
+        firmware_type = _windows_firmware_type()
+        if firmware_type == 2:
+            _enable_environment_privilege()
+        return _capability(firmware_type, _windows_variable_error())
     except OSError as exc:
         return {"status": "unavailable", "message": str(exc)}
 

@@ -53,9 +53,10 @@ Exactly one function writes file contents, `safety.write_private`, and only to
 a path the user named on the command line:
 
 - on Linux, output files are `0600` and directories are `0700`
-- on Windows, files and directories receive a protected DACL with exactly one
-  full-access ACE for their owner; the ACL is read back and verified before any
-  payload bytes are written
+- on Windows, files and directories are created with a protected DACL already in
+  place — exactly one full-access ACE for their owner, no inheritance — so there is
+  no window in which an inherited DACL applies; the ACL is then read back and
+  verified before any payload bytes are written
 - Windows junctions and other reparse points are refused rather than followed
 
 ## Enforcement

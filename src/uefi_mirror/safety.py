@@ -53,6 +53,11 @@ OPEN_EXISTING = 3
 GENERIC_READ = 0x80000000
 GENERIC_WRITE = 0x40000000
 FILE_ATTRIBUTE_TAG_INFO_CLASS = 9
+TOKEN_QUERY = 0x0008
+TOKEN_USER = 1
+SECURITY_DESCRIPTOR_REVISION = 1
+SECURITY_DESCRIPTOR_MIN_LENGTH = 64
+ERROR_ALREADY_EXISTS = 183
 
 
 class _ACL(ctypes.Structure):
@@ -75,6 +80,16 @@ class _FILE_ATTRIBUTE_TAG_INFO(ctypes.Structure):
     _fields_ = [("FileAttributes", ctypes.c_uint32), ("ReparseTag", ctypes.c_uint32)]
 
 
+class _SECURITY_ATTRIBUTES(ctypes.Structure):
+    _fields_ = [("nLength", ctypes.c_uint32),
+                ("lpSecurityDescriptor", ctypes.c_void_p),
+                ("bInheritHandle", ctypes.c_int32)]
+
+
+class _TOKEN_USER(ctypes.Structure):
+    _fields_ = [("Sid", ctypes.c_void_p), ("Attributes", ctypes.c_uint32)]
+
+
 def _dll(name: str):
     return getattr(ctypes, "WinDLL")(name, use_last_error=True)
 
@@ -86,8 +101,13 @@ def _close_windows_handle(handle: int) -> None:
 
 
 def _open_windows_handle(path: str, access: int, disposition: int,
-                         directory: bool = False) -> int:
-    """Open the named object itself and refuse any final-component reparse point."""
+                         directory: bool = False, sec_attr=None) -> int:
+    """Open the named object itself and refuse any final-component reparse point.
+
+    When `sec_attr` is given and the disposition creates the object, it is created
+    with that private security descriptor already in place — no inherited-DACL
+    window. On an existing object the descriptor is ignored by CreateFileW.
+    """
     kernel32 = _dll("kernel32")
     create = kernel32.CreateFileW
     create.argtypes = [ctypes.c_wchar_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p,
@@ -95,7 +115,8 @@ def _open_windows_handle(path: str, access: int, disposition: int,
     create.restype = ctypes.c_void_p
     flags = FILE_FLAG_OPEN_REPARSE_POINT | (
         FILE_FLAG_BACKUP_SEMANTICS if directory else FILE_ATTRIBUTE_NORMAL)
-    handle = create(path, access, FILE_SHARE_READ | FILE_SHARE_WRITE, None,
+    handle = create(path, access, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                    ctypes.byref(sec_attr) if sec_attr is not None else None,
                     disposition, flags, None)
     if handle == ctypes.c_void_p(-1).value:
         raise ctypes.WinError(ctypes.get_last_error())
@@ -144,7 +165,88 @@ def _security_api():
     api.GetSecurityDescriptorControl.argtypes = [
         ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint16), ctypes.POINTER(ctypes.c_uint32)]
     api.GetSecurityDescriptorControl.restype = ctypes.c_int32
+    api.OpenProcessToken.argtypes = [ctypes.c_void_p, ctypes.c_uint32,
+                                     ctypes.POINTER(ctypes.c_void_p)]
+    api.OpenProcessToken.restype = ctypes.c_int32
+    api.GetTokenInformation.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p,
+                                        ctypes.c_uint32, ctypes.POINTER(ctypes.c_uint32)]
+    api.GetTokenInformation.restype = ctypes.c_int32
+    api.CopySid.argtypes = [ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p]
+    api.CopySid.restype = ctypes.c_int32
+    api.InitializeSecurityDescriptor.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+    api.InitializeSecurityDescriptor.restype = ctypes.c_int32
+    api.SetSecurityDescriptorOwner.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int32]
+    api.SetSecurityDescriptorOwner.restype = ctypes.c_int32
+    api.SetSecurityDescriptorDacl.argtypes = [ctypes.c_void_p, ctypes.c_int32,
+                                              ctypes.c_void_p, ctypes.c_int32]
+    api.SetSecurityDescriptorDacl.restype = ctypes.c_int32
+    api.SetSecurityDescriptorControl.argtypes = [ctypes.c_void_p, ctypes.c_uint16,
+                                                ctypes.c_uint16]
+    api.SetSecurityDescriptorControl.restype = ctypes.c_int32
     return api
+
+
+def _token_user_sid() -> "ctypes.Array":
+    """Copy the current process token's user SID into a standalone buffer."""
+    api = _security_api()
+    kernel32 = _dll("kernel32")
+    kernel32.GetCurrentProcess.argtypes = []
+    kernel32.GetCurrentProcess.restype = ctypes.c_void_p
+    token = ctypes.c_void_p()
+    if not api.OpenProcessToken(kernel32.GetCurrentProcess(), TOKEN_QUERY, ctypes.byref(token)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        size = ctypes.c_uint32()
+        api.GetTokenInformation(token, TOKEN_USER, None, 0, ctypes.byref(size))
+        if not size.value:
+            raise ctypes.WinError(ctypes.get_last_error())
+        buffer = ctypes.create_string_buffer(size.value)
+        if not api.GetTokenInformation(token, TOKEN_USER, buffer, size.value,
+                                       ctypes.byref(size)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        user = ctypes.cast(buffer, ctypes.POINTER(_TOKEN_USER)).contents
+        sid_len = api.GetLengthSid(user.Sid)
+        sid = ctypes.create_string_buffer(sid_len)
+        if not api.CopySid(sid_len, sid, user.Sid):
+            raise ctypes.WinError(ctypes.get_last_error())
+        return sid
+    finally:
+        _close_windows_handle(token)
+
+
+def _private_security_attributes(sid: "ctypes.Array"):
+    """Build a SECURITY_ATTRIBUTES with one owner-only, protected (non-inheriting)
+    ACE, so the object is private the instant it is created — no window between
+    creation with an inherited DACL and the later owner-only replacement.
+
+    Returns the SECURITY_ATTRIBUTES and a keep-alive tuple the caller must hold
+    until the create call returns, or the buffers are collected out from under it.
+    """
+    api = _security_api()
+    sid_size = api.GetLengthSid(sid)
+    if not sid_size:
+        raise ctypes.WinError(ctypes.get_last_error())
+    acl_size = (ctypes.sizeof(_ACL) + ctypes.sizeof(_ACCESS_ALLOWED_ACE)
+                - ctypes.sizeof(ctypes.c_uint32) + sid_size + 3) & ~3
+    acl = ctypes.create_string_buffer(acl_size)
+    if not api.InitializeAcl(acl, acl_size, ACL_REVISION):
+        raise ctypes.WinError(ctypes.get_last_error())
+    if not api.AddAccessAllowedAceEx(acl, ACL_REVISION, 0, FILE_ALL_ACCESS, sid):
+        raise ctypes.WinError(ctypes.get_last_error())
+    descriptor = ctypes.create_string_buffer(SECURITY_DESCRIPTOR_MIN_LENGTH)
+    if not api.InitializeSecurityDescriptor(descriptor, SECURITY_DESCRIPTOR_REVISION):
+        raise ctypes.WinError(ctypes.get_last_error())
+    if not api.SetSecurityDescriptorOwner(descriptor, sid, False):
+        raise ctypes.WinError(ctypes.get_last_error())
+    if not api.SetSecurityDescriptorDacl(descriptor, True, acl, False):
+        raise ctypes.WinError(ctypes.get_last_error())
+    if not api.SetSecurityDescriptorControl(descriptor, SE_DACL_PROTECTED, SE_DACL_PROTECTED):
+        raise ctypes.WinError(ctypes.get_last_error())
+    attributes = _SECURITY_ATTRIBUTES()
+    attributes.nLength = ctypes.sizeof(_SECURITY_ATTRIBUTES)
+    attributes.lpSecurityDescriptor = ctypes.cast(descriptor, ctypes.c_void_p)
+    attributes.bInheritHandle = False
+    return attributes, (descriptor, acl, sid)
 
 
 def _get_windows_security(path: str, information: int):
@@ -223,7 +325,10 @@ def _set_windows_private_acl(path: str) -> None:
 def _windows_fd(path: str, access: int, disposition: int, flags: int) -> int:
     import msvcrt
 
-    handle = _open_windows_handle(path, access, disposition)
+    # Create with the owner-only descriptor already applied (closes the H2 race);
+    # keep-alive holds the SD buffers until CreateFileW has consumed them.
+    sec_attr, _keep = _private_security_attributes(_token_user_sid())
+    handle = _open_windows_handle(path, access, disposition, sec_attr=sec_attr)
     try:
         return msvcrt.open_osfhandle(handle, flags | os.O_BINARY)
     except Exception:
@@ -253,14 +358,29 @@ def read_bounded(path: str, limit: int = MAX_VARIABLE_BYTES) -> bytes:
 
 def private_dir(path: str) -> str:
     """Create a directory accessible only by its owner."""
-    os.makedirs(path, mode=0o700, exist_ok=True)
     if WINDOWS:
+        # Create the sensitive directory itself with the owner-only descriptor in
+        # place (no inherited-DACL window). Non-sensitive ancestors may pre-exist
+        # or be made normally; ERROR_ALREADY_EXISTS means a prior step made it and
+        # the read-back below still proves it private.
+        parent = os.path.dirname(os.path.normpath(path))
+        if parent and not os.path.isdir(parent):
+            os.makedirs(parent, exist_ok=True)
+        sec_attr, _keep = _private_security_attributes(_token_user_sid())
+        create_dir = _dll("kernel32").CreateDirectoryW
+        create_dir.argtypes = [ctypes.c_wchar_p, ctypes.c_void_p]
+        create_dir.restype = ctypes.c_int32
+        if not create_dir(path, ctypes.byref(sec_attr)):
+            error = ctypes.get_last_error()
+            if error != ERROR_ALREADY_EXISTS:
+                raise ctypes.WinError(error)
         handle = _open_windows_handle(path, 0, OPEN_EXISTING, directory=True)
         try:
             _set_windows_private_acl(path)
         finally:
             _close_windows_handle(handle)
     else:
+        os.makedirs(path, mode=0o700, exist_ok=True)
         os.chmod(path, 0o700)
     return path
 
