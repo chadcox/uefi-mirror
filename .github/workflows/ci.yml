@@ -44,3 +44,17 @@ jobs:
 
       - name: Lint
         run: ruff check .
+
+      # Diagnostic only, never gates the build. Exercises the real native ABI on
+      # a hosted Windows runner -- GetFirmwareType, SeSystemEnvironmentPrivilege,
+      # the NtEnumerateSystemEnvironmentValuesEx syscall, and owner-only DACL
+      # creation -- which the synthetic parser fixtures cannot. Hosted runners may
+      # restrict firmware-variable access, so this is continue-on-error: it tells
+      # us how far the path gets and surfaces any ctypes signature/struct crash,
+      # but real-hardware validation still lives in docs/windows-validation.md.
+      - name: Windows native firmware smoke (diagnostic, non-fatal)
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        run: |
+          python -m uefi_mirror.cli probe
+          python -m uefi_mirror.cli snapshot -o "${{ runner.temp }}\fw-snap"
