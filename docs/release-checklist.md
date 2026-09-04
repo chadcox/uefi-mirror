@@ -1,7 +1,7 @@
 # Release checklist
 
-Use this list before declaring 1.0. Items marked complete are covered by the
-repository or the recorded reference-system validation.
+This checklist records the evidence used to declare 1.0. Items marked complete
+are covered by the repository or the recorded reference-system validation.
 
 ## Completed locally
 
@@ -33,8 +33,10 @@ repository or the recorded reference-system validation.
   [33925522676](https://github.com/chadcox/uefi-mirror/actions/runs/33925522676)
   passed on Linux and Windows with Python 3.12 and 3.13; both hosted Windows
   firmware smoke steps also completed successfully.
-- [ ] Choose the release version, update package metadata consistently, write
-  release notes, build artifacts, and verify them in a clean environment.
+- [x] Version 1.0.0 is set consistently and release notes are written.
+- [x] The 1.0.0 wheel and source distribution pass Twine validation; the wheel
+  installs into a clean environment and its `--version`, `--help`, and `probe`
+  smoke tests pass.
 
 ## Post-1.0 coverage
 

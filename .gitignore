@@ -21,6 +21,8 @@ __pycache__/
 .venv/
 .pytest_cache/
 .ruff_cache/
+build/
+dist/
 before/
 after/
 bios-images/
@@ -36,7 +38,7 @@ docs/*
 !docs/safety.md
 !docs/compatibility.md
 !docs/release-checklist.md
-CHANGELOG.md
+!CHANGELOG.md
 
 # Agent instructions are local tooling, not part of the shipped project.
 CLAUDE.md

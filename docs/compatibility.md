@@ -1,8 +1,8 @@
 # Compatibility policy
 
-`uefi-mirror` is pre-1.0 software. The command names and option meanings are
-intended to be stable, but a release may still make a necessary breaking change
-when the change is called out in its release notes.
+Starting with 1.0, the command names, existing option meanings, setting IDs,
+documented JSON fields, and format-version rules below are compatibility
+commitments.
 
 ## Machine-readable formats
 
@@ -30,8 +30,6 @@ The public commands are `probe`, `snapshot`, `schema`, `export`, and `diff`.
 the requested operation completed; invalid input, unsafe output, unavailable
 enumeration, and definite schema mismatch return nonzero.
 
-For 1.0, command names, existing option meanings, setting IDs, documented JSON
-fields, and the format-version rules above become compatibility commitments.
 New commands, options, output fields, and status values may be added in minor
 releases when existing consumers can safely ignore them. A breaking CLI or
 machine-readable-format change requires a new major package version, in addition
