@@ -12,11 +12,18 @@ live variables, and tells you what your firmware is actually set to.
 
 That schema can be saved once and reused: extract it to a JSON file on one
 machine, and every later `export` or `diff` — here or on another machine — can
-decode from that file alone, with no capsule and no second vendor download.
+decode from that file alone, without the original firmware image or another
+vendor download.
 
-On the reference board it recovers **5376 settings across 15 form sets**, and
-narrows the 34 that differ from firmware default down to the **4** the setup
-menu would actually show you.
+Host support and firmware-image support are separate. Live collection runs on
+Linux and Windows, but decoding has been hardware-verified only on the ASUS
+reference board listed in [Firmware-image support](#firmware-image-support).
+Windows collection has passed on a hosted Hyper-V UEFI machine; validation on
+physical Windows hardware remains open.
+
+On the reference board it recovers **5376 settings across 15 firmware menu
+groups**, and narrows the 34 that differ from firmware-declared defaults down to
+the **4** that are currently visible in setup.
 
 **Strictly read-only.** No code path creates, modifies, deletes, unlocks or
 writes a UEFI variable or SPI flash region. Enforced by static scans of the
@@ -26,8 +33,9 @@ shipped source, not by convention — see [`docs/safety.md`](docs/safety.md).
 
 - **Headless or remote machines.** Read the configuration over ssh. No reboot, no
   KVM, no trip to the rack.
-- **After a firmware update.** Snapshot before and after; see which settings the
-  vendor moved while you weren't looking.
+- **After a firmware update.** Compare snapshots before and after. Raw comparison
+  does not need a schema; named comparison requires one schema compatible with
+  both versions.
 - **Fleets and homelabs.** Export every machine, diff against a reference; find
   the one box someone tweaked two years ago.
 - **Passthrough and virtualization debugging.** IOMMU, SR-IOV, Above 4G decoding,
@@ -42,28 +50,39 @@ shipped source, not by convention — see [`docs/safety.md`](docs/safety.md).
 - **Bug reports and support threads.** Attach an export instead of a photograph of
   the setup screen.
 
-## Install
+## Install from source
 
 Python 3.12+. Two dependencies (`typer`, `rich`); the firmware parsers are pure
 standard library.
 
 ```console
-$ pip install -e .
+$ git clone https://github.com/chadcox/uefi-mirror.git
+$ cd uefi-mirror
+$ python -m pip install -e .
 $ uefi-mirror probe
 ```
 
-Or run without installing:
+Or run directly from the clone without installing.
+
+Linux/macOS:
 
 ```console
 $ PYTHONPATH=src python3 -m uefi_mirror.cli probe
 ```
 
-### Platform support
+PowerShell:
+
+```powershell
+$env:PYTHONPATH = "src"
+python -m uefi_mirror.cli probe
+```
+
+### Host operating-system support
 
 | Host | Live-variable support |
 |---|---|
 | Linux, booted with UEFI | Reads `efivarfs`; root is normally unnecessary, though firmware permissions can hide individual variables. |
-| Windows, booted with UEFI | `probe` and offline work run normally. Live `snapshot`, `export`, and `diff` require an elevated Administrator terminal to enable `SeSystemEnvironmentPrivilege`. |
+| Windows, booted with UEFI | `probe` and offline work run normally. Live `snapshot`, `export`, and `diff` require an elevated Administrator terminal to enable `SeSystemEnvironmentPrivilege`. Hosted-VM validation passed; physical-hardware validation is pending. |
 | Legacy BIOS / CSM boot | Live UEFI-variable collection is unavailable. Image parsing and work with existing schemas or snapshots still work. |
 
 Windows full enumeration uses the undocumented
@@ -99,8 +118,8 @@ BIOS releases. The image is only read—`uefi-mirror` never flashes it.
 
 ### 3. Export the current configuration
 
-Start with the settings that differ from firmware defaults and would currently
-be visible in the setup menu:
+Start with the settings that differ from firmware-declared defaults and would
+currently be visible in the setup menu:
 
 ```console
 $ uefi-mirror export BIOS.CAP --changed-only --visible-only
@@ -113,7 +132,8 @@ $ uefi-mirror export BIOS.CAP --output bios.json
 $ uefi-mirror export BIOS.CAP --format html --output bios.html
 ```
 
-The first output line reports image compatibility:
+The compatibility line reports how safely the selected schema describes the
+collected variables:
 
 - `matched` — the embedded board model, installed BIOS version, variable
   identities and sizes, and decoded enum values agree.
@@ -126,12 +146,14 @@ The first output line reports image compatibility:
 normal exports. It can produce believable but incorrect setting names and
 values.
 
-Decoding from a schema JSON reports `schema compatibility` instead. Variable
-identities, sizes and enum values are still checked against the live machine, so
-a real layout conflict still stops the run — but the board identity behind a
-schema cannot be confirmed without the image, so a clean check reads
-`unverified` rather than `matched`. A filename can suggest a BIOS version and is
-reported as weak evidence; it is never accepted as proof.
+When decoding from a saved schema JSON, variable identities, sizes and enum
+values are still checked against the live machine. A real layout conflict still
+stops the run, but the schema cannot prove which board its source image belonged
+to, so a clean check reads `unverified` rather than `matched`. A filename can
+suggest a BIOS version and is reported as weak evidence; it is never proof.
+
+In this README and the CLI, “changed” means “different from the
+firmware-declared default.” It does not prove that a person changed the value.
 
 ### 4. Capture and compare a change
 
@@ -144,12 +166,15 @@ $ uefi-mirror snapshot --output after/
 $ uefi-mirror diff before/ after/ --image BIOS.CAP
 ```
 
-The tool never makes the firmware change itself. Without `--image`, `diff`
-still reports which raw variables changed, but cannot name the settings.
+The tool never makes the firmware change itself. Named `diff` uses one image or
+schema for both snapshots and refuses a definite mismatch. If an update changed
+the variable layout, omit `--image` for a raw comparison and export each snapshot
+separately with its matching firmware version.
 
 ### 5. Keep the schema, drop the image
 
-Parsing a 32 MB capsule on every run is unnecessary. Extract the schema once:
+Parsing a 32 MB firmware image on every run is unnecessary. Extract the schema
+once:
 
 ```console
 $ uefi-mirror schema BIOS.CAP --output x870e-2402.json
@@ -252,7 +277,7 @@ BIOS image.
 
 ```console
 $ uefi-mirror export BIOS.CAP --changed-only
-image compatibility: matched (...)
+schema compatibility: matched (...)
 5376 settings, 34 differ from firmware default  (134 variables from /sys/firmware/efi/efivars)
   no_variable 693
   redacted 6
@@ -283,11 +308,12 @@ offline interactive viewer with:
 uefi-mirror export BIOS.CAP --format html --output bios.html
 ```
 
-Before decoding, `export` checks for an embedded board-model and BIOS-version
-match and validates the image's declared variable GUIDs, minimum sizes, and enum
-values against the live machine.
+When given a firmware image, `export` checks for an embedded board-model and
+BIOS-version match. Both image and saved-schema workflows validate declared
+variable GUIDs, minimum sizes, and enum values against the collected variables.
 
-All outputs use `0600` on Linux or a verified owner-only DACL on Windows.
+Files created with `--output` use `0600` on Linux or a verified owner-only DACL
+on Windows.
 `--grep`, `--changed-only`, `--visible-only`, and `--include-inactive` filter
 terminal and text rows; archival JSON remains complete. HTML embeds every
 setting and uses those flags only as initial UI filters.
@@ -333,8 +359,8 @@ $ uefi-mirror diff before/ after/
 
 ## Which changes can you actually see?
 
-Most settings that differ from firmware default are ones the menu would never
-show you. The firmware decides that with `suppress_if` / `gray_out_if` /
+Most settings that differ from firmware-declared defaults are ones the menu
+would never show you. The firmware decides that with `suppress_if` / `gray_out_if` /
 `disable_if` expressions — postfix bytecode stored alongside each question.
 `uefi-mirror` evaluates them against your live values.
 
@@ -353,9 +379,10 @@ $ uefi-mirror export BIOS.CAP --changed-only --visible-only
 *   DIMM Slot Number    DIMM_A2         Setup / Tool / ASUS SPD Information
 ```
 
-Those four are exactly what this machine has changed. The other thirty are real
-stored bytes the menu hides — memory timings left behind by an EXPO profile, for
-example. `Tcl` holds `0x1c` under *Ai Tweaker / DRAM Timing Control*, but its
+Those four are visible settings whose stored values differ from their declared
+defaults. The other thirty are real stored bytes the menu hides — memory timings
+left behind by an EXPO profile, for example. Under *Ai Tweaker / DRAM Timing
+Control*, `Tcl` holds `0x1c`, but its
 `suppress_if` evaluates true because the `Manual` toggles that would reveal it
 sit at `Auto`. The value is genuinely stored; the menu just will not show it to
 you. The JSON records the governing expression for every such setting, so you
@@ -369,36 +396,10 @@ The image also ships one `AMD CBS` form set per CPU family. `uefi-mirror` works
 out which applies to the installed processor, marks the other 2303 settings
 `active: false`, and prints the evidence for its choice instead of asserting it.
 
-## Output
+## Output formats
 
-JSON (`format_version: 3`) is the complete archival record — every setting with schema,
-live value, visibility and provenance:
-
-```json
-{
-  "id": "7b59104a-c00d-4158-87ff-f04d6396a915:0x01c8",
-  "name": "Tcl",
-  "path": ["Setup", "Ai Tweaker", "DRAM Timing Control"],
-  "type": "integer",
-  "help": "DRAM CAS# Latency, the value stepping is 2.",
-  "question_id": 456,
-  "read_only": false,
-  "display": "hex",
-  "varstore": {
-    "guid": "a3a3b874-7636-4182-ba1e-f52c584494e3",
-    "name": "VARSTORE_OCMR_SETTINGS_NAME",
-    "offset": 2154, "size": 2, "kind": "buffer", "varstore_id": 38
-  },
-  "default": 0, "minimum": 0, "maximum": 64, "step": 1,
-  "conditions": [{"kind": "suppress_if", "expression": "true",
-                  "code": "RgI=", "question_refs": []}],
-  "live": {
-    "status": "ok", "value": 28, "raw_value": 28,
-    "label": "0x1c", "candidate_labels": [], "display": "0x1c",
-    "is_default": false, "visibility": "hidden", "active": true
-  }
-}
-```
+JSON (`format_version: 3`) is the complete archival record: every setting's
+schema, live value, visibility, and provenance.
 
 Setting ids are `formset-guid:question-id`, stable across BIOS versions as long
 as the vendor keeps the question id.
@@ -452,7 +453,7 @@ the schema, decode, export, and diff pipeline is shared.
 | Values | `decode.py` | Read variables, decode by offset, resolve CPU-family variants |
 | Diff | `diff.py` | Compare variables and named settings |
 
-## Support matrix
+## Firmware-image support
 
 | Image family | Support |
 |---|---|
@@ -497,4 +498,5 @@ hosted runner and attempts a live snapshot; the
 [2026-09-01 validation run](https://github.com/chadcox/uefi-mirror/actions/runs/33569671960)
 detected Hyper-V UEFI and collected 31 variables. Synthetic buffers still provide
 the deterministic enumeration coverage, and physical-hardware validation remains
-a separate release gate. Tests need no root or Administrator access and no network.
+a separate release gate. Once dependencies are installed, test execution needs
+no root or Administrator access and no network.
