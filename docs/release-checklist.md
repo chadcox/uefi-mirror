@@ -29,8 +29,10 @@ repository or the recorded reference-system validation.
   Disabled to Enabled. Raw diff reported reboot-related variable churn; named
   diff isolated that one setting among 2720 compared, with both snapshots
   matching the firmware 2402 schema.
-- [ ] Run CI on the release commit and review the non-gating hosted Windows smoke
-  result.
+- [x] CI run
+  [33925522676](https://github.com/chadcox/uefi-mirror/actions/runs/33925522676)
+  passed on Linux and Windows with Python 3.12 and 3.13; both hosted Windows
+  firmware smoke steps also completed successfully.
 - [ ] Choose the release version, update package metadata consistently, write
   release notes, build artifacts, and verify them in a clean environment.
 
