@@ -466,23 +466,37 @@ the schema, decode, export, and diff pipeline is shared.
 
 ## Known limitations
 
-- 645 of 3073 applicable settings have conditions that cannot be decided
-  statically; reported as `unknown`, never guessed.
-- 29 of 5376 settings (24 in AMD CBS) resolve to a depth-1 menu path, their
-  parent form reachable only through a ref this walker does not follow.
-- CPU-family inference needs at least one variant group where the members are
-  distinguishable. Where none is, every variant is kept.
-- Vendors ship settings that differ between BIOS versions. Use the image
-  matching your installed firmware version.
-- Only variables the firmware marks runtime-accessible reach the OS at all. A
-  vendor that marks its setup store boot-services-only leaves nothing for any
-  userspace tool to read: those settings decode as `no variable`, and the
-  compatibility line reports how many declared varstores were readable. On the
-  reference board every setup store carries `NV+BS+RT` and is readable
-  unprivileged.
-- Windows enumeration relies on an undocumented syscall and may be unavailable
-  on future Windows releases or restricted hosts. The documented named-read API
-  remains usable only when the caller already knows a variable's name and GUID.
+- **Use the matching firmware image.** Setting layouts can change between BIOS
+  versions, even on the same motherboard. Use the image matching the installed
+  version; `uefi-mirror` refuses definite mismatches unless `--allow-mismatch`
+  is explicitly passed.
+
+- **Some settings are unavailable to the operating system.** Firmware can hide
+  variables after boot. Those settings appear as `no_variable`; no userspace
+  tool can recover their current values.
+
+- **“Changed” does not necessarily mean user-modified.** It means the stored
+  value differs from the firmware-declared default. Hardware initialization,
+  firmware updates, and vendor logic can also produce such differences.
+
+- **Visibility cannot always be determined.** Some firmware conditions depend
+  on values or operations that cannot be evaluated safely. These settings are
+  reported as `unknown`, never guessed. On the reference firmware, this affects
+  645 of 3073 applicable settings.
+
+- **Some menu paths may be incomplete.** Firmware sometimes links menu pages in
+  ways the parser does not yet follow. On the reference firmware, 29 of 5376
+  settings have only a top-level menu location.
+
+- **Firmware may contain settings for several CPU families.** The tool selects
+  the applicable group when the available variables identify it. Otherwise,
+  multiple possible groups remain in the export rather than choosing one
+  without evidence.
+
+- **Windows live collection depends on an undocumented Windows interface.** It
+  works on the tested hosted Windows environment, but Microsoft may change or
+  restrict it. If enumeration is unavailable, the command stops with a clear
+  error instead of returning a partial snapshot.
 
 ## Tests
 
