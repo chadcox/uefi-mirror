@@ -10,11 +10,17 @@ import pytest
 from typer.testing import CliRunner
 
 from tests import fixtures
-from uefi_mirror import decode
+from uefi_mirror import __version__, decode
 from uefi_mirror.cli import app
 
 runner = CliRunner()
 GUID = str(fixtures.VARSTORE_GUID)
+
+
+def test_version_option():
+    result = runner.invoke(app, ["--version"])
+    assert result.exit_code == 0
+    assert result.stdout.strip() == f"uefi-mirror {__version__}"
 
 
 @pytest.fixture

@@ -183,6 +183,13 @@ def from_snapshot(directory: str) -> VariableStore:
 
 EFI_GLOBAL_VARIABLE = "8be4df61-93ca-11d2-aa0d-00e098032b8c"
 
+# These standard global variables are not scalar IFR values. Firmware creates
+# placeholder one-of questions for them, then supplies their choices at runtime:
+# BootOrder is an array of UINT16 boot IDs and PlatformLang is an ASCII language
+# tag. Reading the first two bytes as a static enum would manufacture an invalid
+# value and weaken an otherwise valid schema compatibility check.
+DYNAMIC_GLOBAL_ENUM_VARIABLES = frozenset({"BootOrder", "PlatformLang"})
+
 
 @dataclass
 class Compatibility:
@@ -329,10 +336,12 @@ def decode_setting(setting: Setting, store: VariableStore) -> DecodedSetting:
         return DecodedSetting(setting, REDACTED)
     if setting.type in ("date", "time"):
         return DecodedSetting(setting, UNSUPPORTED)
-
     data = store.get(ref.name, ref.guid)
     if data is None:
         return DecodedSetting(setting, NO_VARIABLE)
+    if (setting.type == "enum" and ref.guid.lower() == EFI_GLOBAL_VARIABLE
+            and ref.name in DYNAMIC_GLOBAL_ENUM_VARIABLES):
+        return DecodedSetting(setting, UNSUPPORTED)
 
     size = ref.size or 1
     if setting.type == "string":

@@ -281,8 +281,7 @@ schema compatibility: matched (...)
 5376 settings, 34 differ from firmware default  (134 variables from /sys/firmware/efi/efivars)
   no_variable 693
   redacted 6
-  unknown_value 2
-  unsupported 4
+  unsupported 6
 ```
 
 `no_variable` means the schema declares a varstore this machine does not expose;
@@ -295,7 +294,7 @@ refuses to guess:
 $ uefi-mirror export --schema x870e-2402.json --changed-only
 schema compatibility: unverified (schema carries no firmware image, so the board
 id behind it cannot be confirmed; filename contains installed BIOS version
-'2402'; 26/36 declared varstores are readable; 1552/1554 live enum values are
+'2402'; 26/36 declared varstores are readable; 1552/1552 live enum values are
 valid)
 5376 settings, 34 differ from firmware default
 ```
@@ -423,6 +422,12 @@ is not the one this parser writes, and refuses malformed fields rather than
 loading a partial schema. `schema_hash()` names a schema by the SHA-256 of its
 canonical JSON, which the same parser reproduces byte for byte from the same
 image.
+
+The stability rules for CLI behavior and machine-readable formats are documented
+in [`docs/compatibility.md`](docs/compatibility.md). Format versions are independent
+of the package version so incompatible document changes can be rejected clearly.
+The remaining 1.0 gates are tracked in
+[`docs/release-checklist.md`](docs/release-checklist.md).
 
 ## How it works
 

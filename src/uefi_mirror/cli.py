@@ -23,6 +23,22 @@ SNAPSHOT_FORMAT_VERSION = decode.SNAPSHOT_FORMAT_VERSION
 WINDOWS_FIRMWARE = "windows-firmware"
 
 
+def _version(value: bool) -> None:
+    if value:
+        typer.echo(f"uefi-mirror {__version__}")
+        raise typer.Exit()
+
+
+@app.callback()
+def main(
+    version: bool = typer.Option(
+        False, "--version", callback=_version, is_eager=True,
+        help="Show the installed version and exit.",
+    ),
+) -> None:
+    """Export live UEFI/BIOS settings without changing firmware."""
+
+
 def _now() -> str:
     return datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -378,8 +394,8 @@ def diff(
 ) -> None:
     """Compare two snapshots, or a snapshot against the live machine.
 
-    Without --image this compares raw variable bytes. With --image the changed
-    bytes are resolved back to the setting names they belong to.
+    Without --image or --schema this compares raw variable bytes. With either,
+    changed bytes are resolved back to the setting names they belong to.
     """
     if fmt not in ("json", "text"):
         raise typer.BadParameter("--format must be text or json")

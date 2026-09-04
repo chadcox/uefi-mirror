@@ -85,6 +85,15 @@ def test_a_schema_from_a_future_version_is_refused():
         Schema.from_dict(data)
 
 
+def test_additive_unknown_schema_fields_are_ignored():
+    data = _schema().as_dict()
+    data["future_top_level"] = {"added": True}
+    data["settings"][0]["future_setting_field"] = "new metadata"
+    data["settings"][0]["varstore"]["future_varstore_field"] = 1
+    loaded = Schema.from_dict(data)
+    assert loaded.settings[0].id == data["settings"][0]["id"]
+
+
 def test_an_unreadable_condition_is_refused_rather_than_dropped():
     """Silently discarding it would turn a suppress_if into 'always visible'."""
     data = _schema().as_dict()

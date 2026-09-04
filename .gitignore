@@ -1,9 +1,18 @@
 # Never commit proprietary firmware or raw host NVRAM.
 *.CAP
 *.cap
+*.ROM
+*.rom
 *.bin
+*.BIN
 *.fd
+*.FD
+*.zip
+firmware-*/
 snapshot/
+snapshots/
+snapshot-*/
+*-snapshot/
 profile/
 raw-variables/
 schema-*.json
@@ -13,13 +22,20 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 before/
+after/
 bios-images/
 bios.json
 bios.txt
+bios.html
+uefi-export*.json
+uefi-export*.txt
+uefi-export*.html
 
 # Working notes and plans stay local; only the safety contract ships.
 docs/*
 !docs/safety.md
+!docs/compatibility.md
+!docs/release-checklist.md
 CHANGELOG.md
 
 # Agent instructions are local tooling, not part of the shipped project.

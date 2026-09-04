@@ -184,6 +184,20 @@ def test_decode_reports_a_value_no_option_declares():
     assert item.value == 0x42
 
 
+@pytest.mark.parametrize("name,payload", [
+    ("BootOrder", b"\x02\x00\x01\x00"),
+    ("PlatformLang", b"en-US\x00"),
+])
+def test_dynamic_global_questions_are_not_misreported_as_invalid_enums(name, payload):
+    setting = Setting(id="dynamic", name=name, type="enum", formset_guid="g",
+                      question_id=1,
+                      varstore=VarStoreRef(decode.EFI_GLOBAL_VARIABLE, name,
+                                           0, 2, "buffer"))
+    store = decode.VariableStore(source="test")
+    store.payloads[(name, decode.EFI_GLOBAL_VARIABLE)] = payload
+    assert decode.decode_setting(setting, store).status == decode.UNSUPPORTED
+
+
 def test_decode_handles_missing_and_short_variables():
     image = fixtures.build_image()
     setting = builder.build({}, firmware_volume.walk(image)).settings[0]

@@ -76,6 +76,14 @@ def test_snapshot_rejects_unsupported_version(tmp_path):
         decode.from_snapshot(str(tmp_path))
 
 
+def test_snapshot_accepts_additive_unknown_fields(tmp_path):
+    manifest = _snapshot(tmp_path)
+    manifest["future_top_level"] = {"added": True}
+    manifest["variables"][0]["future_variable_field"] = "new metadata"
+    (tmp_path / "manifest.json").write_text(json.dumps(manifest))
+    assert decode.from_snapshot(str(tmp_path)).get("Setup", GUID) == b"payload"
+
+
 def test_missing_payload_is_allowed_only_for_collection_error(tmp_path):
     manifest = _snapshot(tmp_path)
     os.unlink(tmp_path / "raw-variables" / FILENAME)
