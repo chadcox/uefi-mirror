@@ -492,7 +492,9 @@ $ ruff check .
 ```
 
 CI runs this suite on `ubuntu-latest` and `windows-latest`, including native
-Windows DACL and junction checks. It does not read the runner's real firmware
-variables: hosted runners can restrict that access, so enumeration parsing uses
-synthetic buffers. Tests need no root or Administrator access and no network,
-and never touch the host's real firmware-variable store.
+Windows DACL and junction checks. A non-gating Windows smoke step also probes the
+hosted runner and attempts a live snapshot; the
+[2026-09-01 validation run](https://github.com/chadcox/uefi-mirror/actions/runs/33569671960)
+detected Hyper-V UEFI and collected 31 variables. Synthetic buffers still provide
+the deterministic enumeration coverage, and physical-hardware validation remains
+a separate release gate. Tests need no root or Administrator access and no network.
