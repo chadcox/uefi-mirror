@@ -25,8 +25,10 @@ repository or the recorded reference-system validation.
 
 ## Remaining 1.0 validation
 
-- [ ] Capture a real before/after BIOS change on Windows and verify both raw and
-  named `diff` output.
+- [x] A real Windows before/after test changed Bluetooth Controller from
+  Disabled to Enabled. Raw diff reported reboot-related variable churn; named
+  diff isolated that one setting among 2720 compared, with both snapshots
+  matching the firmware 2402 schema.
 - [ ] Run CI on the release commit and review the non-gating hosted Windows smoke
   result.
 - [ ] Choose the release version, update package metadata consistently, write

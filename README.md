@@ -522,5 +522,8 @@ hosted runner and attempts a live snapshot; the
 detected Hyper-V UEFI and collected 31 variables. Synthetic buffers still provide
 the deterministic enumeration coverage. Physical Windows validation on an ASUS
 ROG Strix X870E-E Gaming WiFi running firmware 2402 collected 137 variables and
-successfully decoded 5376 settings with a matched schema. Once dependencies are
-installed, test execution needs no root or Administrator access and no network.
+successfully decoded 5376 settings with a matched schema. A physical Windows
+before/after test changed Bluetooth Controller from Disabled to Enabled: raw
+comparison observed the expected reboot-related variable churn, while named
+comparison isolated that single setting among 2720 compared. Once dependencies
+are installed, test execution needs no root or Administrator access and no network.
