@@ -460,6 +460,10 @@ the schema, decode, export, and diff pipeline is shared.
 
 ## Firmware-image support
 
+The 1.0 hardware support scope is the ASUS ROG Strix X870E-E Gaming WiFi with
+firmware 2402. The other entries below are parser coverage for post-1.0 hardware
+validation, not 1.0 support claims.
+
 | Image family | Support |
 |---|---|
 | ASUS ROG Strix X870E-E Gaming WiFi, firmware 2402 | Decoding hardware-verified; live collection validated on Linux and physical Windows |

@@ -20,14 +20,11 @@ repository or the recorded reference-system validation.
   Git.
 - [x] The CLI exposes stable `--help` and `--version` discovery interfaces.
 - [x] The compatibility policy identifies the intended 1.0 contract.
+- [x] The 1.0 hardware scope is explicitly limited to the ASUS ROG Strix
+  X870E-E Gaming WiFi with firmware 2402.
 
-## Remaining 1.0 decisions and external validation
+## Remaining 1.0 validation
 
-- [ ] Decide whether 1.0 supports only the ASUS reference platform or claims a
-  broader AMI Aptio hardware scope.
-- [ ] If claiming broader hardware support, validate live decoding on physical
-  Gigabyte or MSI hardware with the matching firmware image.
-- [ ] Validate physical Windows collection on at least one additional board.
 - [ ] Capture a real before/after BIOS change on Windows and verify both raw and
   named `diff` output.
 - [ ] Run CI on the release commit and review the non-gating hosted Windows smoke
@@ -35,6 +32,11 @@ repository or the recorded reference-system validation.
 - [ ] Choose the release version, update package metadata consistently, write
   release notes, build artifacts, and verify them in a clean environment.
 
-If 1.0 is explicitly scoped to the ASUS reference platform, the cross-vendor
-items are follow-up coverage rather than blockers. The before/after diff and
-clean-build checks should remain release gates for either scope.
+## Post-1.0 coverage
+
+- [ ] Validate live decoding on physical Gigabyte or MSI hardware with the
+  matching firmware image before claiming support for either platform.
+- [ ] Validate physical Windows collection on at least one additional board.
+
+Cross-vendor items are follow-up coverage rather than 1.0 blockers. The
+before/after diff and clean-build checks remain release gates.
