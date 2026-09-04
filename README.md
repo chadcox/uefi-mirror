@@ -16,10 +16,10 @@ decode from that file alone, without the original firmware image or another
 vendor download.
 
 Host support and firmware-image support are separate. Live collection runs on
-Linux and Windows, but decoding has been hardware-verified only on the ASUS
-reference board listed in [Firmware-image support](#firmware-image-support).
-Windows collection has passed on a hosted Hyper-V UEFI machine; validation on
-physical Windows hardware remains open.
+Linux and Windows. Decoding and physical Windows collection have been
+hardware-verified on the ASUS reference board listed in
+[Firmware-image support](#firmware-image-support). Windows collection has also
+passed on a hosted Hyper-V UEFI machine.
 
 On the reference board it recovers **5376 settings across 15 firmware menu
 groups**, and narrows the 34 that differ from firmware-declared defaults down to
@@ -82,7 +82,7 @@ python -m uefi_mirror.cli probe
 | Host | Live-variable support |
 |---|---|
 | Linux, booted with UEFI | Reads `efivarfs`; root is normally unnecessary, though firmware permissions can hide individual variables. |
-| Windows, booted with UEFI | `probe` and offline work run normally. Live `snapshot`, `export`, and `diff` require an elevated Administrator terminal to enable `SeSystemEnvironmentPrivilege`. Hosted-VM validation passed; physical-hardware validation is pending. |
+| Windows, booted with UEFI | `probe` and offline work run normally. Live `snapshot`, `export`, and `diff` require an elevated Administrator terminal to enable `SeSystemEnvironmentPrivilege`. Collection is validated on hosted Hyper-V UEFI and physical ASUS hardware. |
 | Legacy BIOS / CSM boot | Live UEFI-variable collection is unavailable. Image parsing and work with existing schemas or snapshots still work. |
 
 Windows full enumeration uses the undocumented
@@ -457,7 +457,7 @@ the schema, decode, export, and diff pipeline is shared.
 
 | Image family | Support |
 |---|---|
-| ASUS ROG Strix X870E-E Gaming WiFi, firmware 2402 | Hardware verified |
+| ASUS ROG Strix X870E-E Gaming WiFi, firmware 2402 | Decoding hardware-verified; live collection validated on Linux and physical Windows |
 | Gigabyte X570 AORUS ELITE F40 | Parsed: 2342 settings/20 form sets; hardware unverified |
 | MSI MS-7E54, firmware 2.A90 | Parsed: 9511 settings/10 form sets; hardware unverified |
 | Other AMI Aptio images | Expected, not verified |
@@ -494,9 +494,9 @@ the schema, decode, export, and diff pipeline is shared.
   without evidence.
 
 - **Windows live collection depends on an undocumented Windows interface.** It
-  works on the tested hosted Windows environment, but Microsoft may change or
-  restrict it. If enumeration is unavailable, the command stops with a clear
-  error instead of returning a partial snapshot.
+  works on tested hosted Hyper-V and physical ASUS hardware, but Microsoft may
+  change or restrict it. If enumeration is unavailable, the command stops with
+  a clear error instead of returning a partial snapshot.
 
 ## Tests
 
@@ -511,6 +511,7 @@ Windows DACL and junction checks. A non-gating Windows smoke step also probes th
 hosted runner and attempts a live snapshot; the
 [2026-09-01 validation run](https://github.com/chadcox/uefi-mirror/actions/runs/33569671960)
 detected Hyper-V UEFI and collected 31 variables. Synthetic buffers still provide
-the deterministic enumeration coverage, and physical-hardware validation remains
-a separate release gate. Once dependencies are installed, test execution needs
-no root or Administrator access and no network.
+the deterministic enumeration coverage. Physical Windows validation on an ASUS
+ROG Strix X870E-E Gaming WiFi running firmware 2402 collected 137 variables and
+successfully decoded 5376 settings with a matched schema. Once dependencies are
+installed, test execution needs no root or Administrator access and no network.
