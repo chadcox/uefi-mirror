@@ -358,7 +358,7 @@ moved:
 ```console
 $ uefi-mirror diff before/ after/
 1 variables changed, 0 added, 0 removed
-  pass --image BIOS.CAP to name the settings behind these bytes
+  pass --image BIOS.CAP or --schema schema.json to name the settings behind these bytes
   changed  AmdSetupRPL
 ```
 
