@@ -423,9 +423,12 @@ A schema JSON document — what `schema --output` writes and what `export
 --schema` / `diff --schema` read — is self-contained: each condition carries the IFR
 expression bytes (`code`, base64) alongside its human-readable form, so a
 schema parsed on one machine and reloaded on another evaluates visibility
-identically. `Schema.from_json()` refuses a document whose `format_version`
 is not the one this parser writes, and refuses malformed fields rather than
-loading a partial schema. `schema_hash()` names a schema by the SHA-256 of its
+loading a partial schema. Storage coordinates are validated strictly: a
+negative or boolean offset, a field width outside the 1/2/4/8-byte IFR set, a
+negative varstore size, or a negative string/ordered-list length is refused
+on load, where a hand-edited file once decoded from the wrong end of the
+variable. `schema_hash()` names a schema by the SHA-256 of its
 canonical JSON, which the same parser reproduces byte for byte from the same
 image.
 

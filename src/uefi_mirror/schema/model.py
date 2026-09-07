@@ -27,6 +27,12 @@ TYPE_BY_OPCODE_KIND = {
     "time": "time",
 }
 
+# The field widths this builder can emit: a checkbox is 1 byte; a one-of or
+# numeric question is 1, 2, 4, or 8 per its IFR size flag; string, password,
+# ordered list, date, and time questions carry None and let the decoder
+# determine the layout. A saved schema claiming any other width names a slice
+# no question in this format has.
+VALID_FIELD_WIDTHS = (1, 2, 4, 8)
 
 def _str(data: dict, key: str) -> str:
     value = data.get(key, "")
@@ -37,9 +43,11 @@ def _str(data: dict, key: str) -> str:
 
 def _int(data: dict, key: str) -> int | None:
     value = data.get(key)
-    if value is None or isinstance(value, bool):
-        return None if value is None else int(value)
-    if not isinstance(value, int):
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        # A JSON true/false is not a coordinate: reading it as 1/0 would move
+        # the byte slice the schema describes instead of refusing it.
         raise ValueError(f"{key!r} must be an integer, got {type(value).__name__}")
     return value
 
@@ -131,8 +139,15 @@ class VarStoreRef:
 
     @classmethod
     def from_dict(cls, data: dict) -> "VarStoreRef":
-        return cls(_str(data, "guid"), _str(data, "name"), _int(data, "offset"),
-                   _int(data, "size"), _str(data, "kind"), _int(data, "attributes"),
+        offset = _int(data, "offset")
+        if offset is not None and offset < 0:
+            raise ValueError(f"'offset' must be >= 0, got {offset}")
+        size = _int(data, "size")
+        if size is not None and size not in VALID_FIELD_WIDTHS:
+            raise ValueError(f"'size' must be one of {VALID_FIELD_WIDTHS} or "
+                             f"absent, got {size}")
+        return cls(_str(data, "guid"), _str(data, "name"), offset, size,
+                   _str(data, "kind"), _int(data, "attributes"),
                    _int(data, "varstore_id"))
 
 
@@ -156,9 +171,12 @@ class VarStoreInfo:
 
     @classmethod
     def from_dict(cls, data: dict) -> "VarStoreInfo":
+        size = _int(data, "size")
+        if size is not None and size < 0:
+            raise ValueError(f"'size' must be >= 0, got {size}")
         return cls(_str(data, "formset_guid"), _int(data, "varstore_id") or 0,
                    _str(data, "guid"), _str(data, "name"), _str(data, "kind"),
-                   _int(data, "size"), _int(data, "attributes"))
+                   size, _int(data, "attributes"))
 
 
 @dataclass
@@ -209,10 +227,21 @@ class Setting:
         path = _list(data, "path")
         if not all(isinstance(part, str) for part in path):
             raise ValueError("'path' must be a list of strings")
+        setting_type = _str(data, "type")
+        minimum = _int(data, "minimum")
+        maximum = _int(data, "maximum")
+        if setting_type in ("string", "ordered_list"):
+            # For these two types the bounds are character/entry counts the
+            # decoder slices by, not values. A negative count is a malformed
+            # length, not a signed minimum, and must not load.
+            for bound_key, bound in (("minimum", minimum), ("maximum", maximum)):
+                if bound is not None and bound < 0:
+                    raise ValueError(f"'{bound_key}' for a {setting_type} "
+                                     f"setting must be >= 0, got {bound}")
         return cls(
             id=_str(data, "id"),
             name=_str(data, "name"),
-            type=_str(data, "type"),
+            type=setting_type,
             formset_guid=_str(data, "formset_guid"),
             question_id=_int(data, "question_id") or 0,
             path=path,
@@ -220,8 +249,8 @@ class Setting:
             options=[OptionValue.from_dict(o) for o in _list(data, "options")],
             default=_int(data, "default"),
             manufacturing_default=_int(data, "manufacturing_default"),
-            minimum=_int(data, "minimum"),
-            maximum=_int(data, "maximum"),
+            minimum=minimum,
+            maximum=maximum,
             step=_int(data, "step"),
             varstore=(VarStoreRef.from_dict(data["varstore"])
                       if data.get("varstore") else None),

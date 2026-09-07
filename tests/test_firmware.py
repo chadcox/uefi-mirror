@@ -11,7 +11,7 @@ from uefi_mirror import decode, report
 from uefi_mirror.firmware import cap, firmware_volume, hii, ifr
 from uefi_mirror.firmware.strings import parse_string_package
 from uefi_mirror.schema import builder
-from uefi_mirror.schema.model import Setting, VarStoreRef
+from uefi_mirror.schema.model import OptionValue, Setting, VarStoreRef
 
 
 def test_capsule_header_is_stripped(tmp_path):
@@ -221,6 +221,38 @@ def test_decode_handles_missing_and_short_variables():
     setting = builder.build({}, firmware_volume.walk(image)).settings[0]
     assert decode.decode_setting(setting, decode.VariableStore()).status == decode.NO_VARIABLE
     assert decode.decode_setting(setting, _live_store(b"\x00" * 8)).status == decode.OUT_OF_RANGE
+
+
+def test_a_negative_offset_cannot_decode_as_ok():
+    """Offset -2 used to slice the variable from the end and return the tail
+    bytes as a plausible value with status ok. A malformed coordinate is out
+    of range, whatever bytes happen to sit at the variable's end."""
+    setting = Setting(id="bad", name="Master Switch", type="enum", formset_guid="g",
+                      question_id=1,
+                      varstore=VarStoreRef(str(fixtures.VARSTORE_GUID), "Setup",
+                                           -2, 1, "efi"),
+                      options=[OptionValue("Disabled", 0), OptionValue("Enabled", 1)])
+    item = decode.decode_setting(setting, _live_store(b"\x00\x00\x00\x01"))
+    assert item.status == decode.OUT_OF_RANGE
+    assert item.value is None
+    assert item.raw_value is None
+
+
+@pytest.mark.parametrize("offset,size,expected", [
+    (0, 4, decode.OK),            # slice ends exactly on the last byte
+    (1, 4, decode.OUT_OF_RANGE),  # one byte past the end
+    (0, 0, decode.OUT_OF_RANGE),  # zero width is not a slice
+    (0, -1, decode.OUT_OF_RANGE),
+])
+def test_coordinates_at_the_payload_boundary(offset, size, expected):
+    setting = Setting(id="edge", name="Master Switch", type="integer",
+                      formset_guid="g", question_id=1,
+                      varstore=VarStoreRef(str(fixtures.VARSTORE_GUID), "Setup",
+                                           offset, size, "efi"))
+    item = decode.decode_setting(setting, _live_store(b"\x01\x02\x03\x04"))
+    assert item.status == expected
+    if expected == decode.OK:
+        assert item.value == 0x04030201
 
 
 def test_passwords_are_never_read_out():

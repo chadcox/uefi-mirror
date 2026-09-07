@@ -112,6 +112,22 @@ def test_a_corrupt_schema_file_is_named_in_the_error(tmp_path):
     assert "bad.json" in result.output and "JSON" in result.output
 
 
+def test_a_malformed_saved_schema_is_refused_before_any_output(tmp_path, image):
+    path = _schema_file(tmp_path, image)
+    data = json.loads(path.read_text())
+    data["settings"][0]["varstore"]["offset"] = -2
+    path.write_text(json.dumps(data))
+    out = tmp_path / "report.json"
+    out.write_text("sentinel")
+    result = runner.invoke(app, ["export", "--schema", str(path),
+                                 "--snapshot", str(_snapshot(tmp_path)),
+                                 "--output", str(out)])
+    assert result.exit_code != 0
+    assert "offset" in result.output
+    # The refusal must happen before any report is created or overwritten.
+    assert out.read_text() == "sentinel"
+
+
 def test_diff_can_name_settings_from_a_schema_file(tmp_path, image):
     old = _snapshot(tmp_path / "a")
     new = _snapshot(tmp_path / "b", bytes([1]) + bytes(0xFF))

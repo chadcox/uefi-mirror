@@ -116,6 +116,41 @@ def test_malformed_schema_fields_are_refused(mutate):
         Schema.from_dict(data)
 
 
+@pytest.mark.parametrize("mutate", [
+    lambda d: d["settings"][0]["varstore"].update(offset=-2),
+    lambda d: d["settings"][0]["varstore"].update(offset=-1),
+    lambda d: d["settings"][0]["varstore"].update(offset=True),
+    lambda d: d["settings"][0]["varstore"].update(offset=False),
+    lambda d: d["settings"][0]["varstore"].update(size=-1),
+    lambda d: d["settings"][0]["varstore"].update(size=0),
+    lambda d: d["settings"][0]["varstore"].update(size=3),
+    lambda d: d["settings"][0]["varstore"].update(size=16),
+    lambda d: d["settings"][0]["varstore"].update(size=True),
+    lambda d: d["settings"][0]["varstore"].update(size=False),
+    lambda d: d["varstores"][0].update(size=-4),
+    lambda d: d["settings"][0].update(type="string", minimum=-1),
+    lambda d: d["settings"][0].update(type="string", maximum=-1),
+    lambda d: d["settings"][0].update(type="ordered_list", maximum=-1),
+    lambda d: d["settings"][0].update(question_id=True),
+])
+def test_malformed_storage_coordinates_are_refused_on_load(mutate):
+    data = _schema().as_dict()
+    mutate(data)
+    with pytest.raises(ValueError):
+        Schema.from_dict(data)
+
+
+def test_signed_numeric_bounds_still_load():
+    """Numeric minimum/maximum are values, not lengths: a signed range below
+    zero is legitimate firmware and must survive a round trip unchanged."""
+    data = _schema().as_dict()
+    data["settings"][0].update(type="integer", display="signed",
+                               minimum=-8, maximum=7)
+    loaded = Schema.from_dict(data)
+    assert loaded.settings[0].minimum == -8
+    assert loaded.settings[0].maximum == 7
+
+
 def test_json_that_is_not_a_schema_is_refused():
     with pytest.raises(ValueError, match="not valid JSON"):
         Schema.from_json("{oops")

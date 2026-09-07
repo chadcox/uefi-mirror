@@ -349,6 +349,14 @@ def decode_setting(setting: Setting, store: VariableStore) -> DecodedSetting:
             and ref.name in DYNAMIC_GLOBAL_ENUM_VARIABLES):
         return DecodedSetting(setting, UNSUPPORTED)
 
+    # Defensive: a directly constructed or corrupted setting can carry
+    # coordinates Python would happily slice with — a negative offset reads
+    # from the end of the variable, a zero width falls through to 1. Both
+    # manufacture a plausible value from a slice no question declared.
+    if (not isinstance(ref.offset, int) or ref.offset < 0
+            or (ref.size is not None
+                and (not isinstance(ref.size, int) or ref.size <= 0))):
+        return DecodedSetting(setting, OUT_OF_RANGE)
     size = ref.size or 1
     if setting.type == "string":
         chars = setting.maximum or 0
