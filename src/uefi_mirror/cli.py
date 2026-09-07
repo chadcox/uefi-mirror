@@ -81,6 +81,24 @@ def _live_store(efivars: str | None) -> decode.VariableStore:
         WINDOWS_FIRMWARE if _windows_live(efivars) else "efivarfs")
 
 
+def _write_output(path: str, data: bytes) -> None:
+    """Write a user-named output file, surfacing a refusal as a clean error."""
+    try:
+        write_private(path, data)
+    except OSError as exc:
+        typer.echo(f"refused output: {exc}", err=True)
+        raise typer.Exit(1) from exc
+
+
+def _output_dir(path: str) -> str:
+    """Create a user-named output directory, surfacing a refusal cleanly."""
+    try:
+        return private_dir(path)
+    except OSError as exc:
+        typer.echo(f"refused output directory: {exc}", err=True)
+        raise typer.Exit(1) from exc
+
+
 def _load_schema(image: str | None,
                  schema_file: str | None) -> tuple[Schema, bytes | None, str]:
     """Get a schema from a firmware image or from a published schema JSON.
@@ -187,11 +205,11 @@ def snapshot(
         if var.payload is not None and not safe_component(var.filename):
             raise typer.BadParameter(f"unsafe firmware variable filename: {var.filename!r}")
 
-    private_dir(output)
-    raw_dir = private_dir(os.path.join(output, "raw-variables"))
+    _output_dir(output)
+    raw_dir = _output_dir(os.path.join(output, "raw-variables"))
     for var in variables:
         if var.payload is not None:
-            write_private(os.path.join(raw_dir, var.filename), var.payload)
+            _write_output(os.path.join(raw_dir, var.filename), var.payload)
 
     failed = [v for v in variables if v.error is not None]
     manifest = {
@@ -202,7 +220,7 @@ def snapshot(
         "platform": platform.summary(),
         "variables": [v.manifest() for v in variables],
     }
-    write_private(
+    _write_output(
         os.path.join(output, "manifest.json"),
         json.dumps(manifest, indent=2, sort_keys=True).encode() + b"\n",
     )
@@ -237,7 +255,7 @@ def schema(
         raise typer.Exit(1)
 
     if output:
-        write_private(output, json.dumps(result.as_dict(), indent=2).encode() + b"\n")
+        _write_output(output, json.dumps(result.as_dict(), indent=2).encode() + b"\n")
 
     matches = result.settings
     if grep:
@@ -340,7 +358,7 @@ def export(
         else:
             payload = report.to_text(
                 document, matches, f"UEFI settings export - {source_name}").encode()
-        write_private(output, payload)
+        _write_output(output, payload)
 
     counts = document["counts"]
     console.print(f"{counts['total']} settings, "
@@ -437,7 +455,7 @@ def diff(
     result = diff_mod.build(old_store, new_store, old_decoded, new_decoded)
     title = f"UEFI settings diff - {os.path.basename(old)} -> {os.path.basename(new)}"
     if output:
-        write_private(output, diff_mod.to_json(result) if fmt == "json"
+        _write_output(output, diff_mod.to_json(result) if fmt == "json"
                       else diff_mod.to_text(result, title).encode())
 
     tally = result.counts()

@@ -49,15 +49,29 @@ and SHA-256. Structural or integrity errors abort the snapshot load.
 
 ## Writes that do happen
 
-Exactly one function writes file contents, `safety.write_private`, and only to
-a path the user named on the command line:
+Exactly two functions mutate the filesystem, `safety.write_private` (file
+contents) and `safety.private_dir` (the output directory tree), and only to
+paths the user named on the command line. On Linux both refuse, before any
+`mkdir`, `chmod`, truncate or payload write:
 
-- on Linux, output files are `0600` and directories are `0700`
-- on Windows, files and directories are created with a protected DACL already in
-  place — exactly one full-access ACE for their owner, no inheritance — so there is
-  no window in which an inherited DACL applies; the ACL is then read back and
-  verified before any payload bytes are written
-- Windows junctions and other reparse points are refused rather than followed
+- a destination that resolves under the kernel firmware tree `/sys/firmware`
+  (symlink aliases and `..` traversal included, via the resolved real path);
+- a final-component symlink, a hard-linked existing file (link count > 1), or
+  an existing file owned by another user;
+- an output directory that is a symlink or owned by another user.
+
+Once the checks pass, an existing file is tightened with `fchmod(fd, 0o600)`
+through its own descriptor before it is truncated, so a pre-existing `0644`
+file is never writable by others even momentarily; a new file is created
+`0600` from the start. Output directories are tightened with
+`fchmod(fd, 0o700)` the same way. Permissions are applied by descriptor, so
+they cannot race a swapped path and cannot follow a symlink.
+
+On Windows, files and directories are created with a protected DACL already in
+place — exactly one full-access ACE for their owner, no inheritance — so there
+is no window in which an inherited DACL applies; the ACL is then read back and
+verified before any payload bytes are written. Windows junctions and other
+reparse points are refused rather than followed.
 
 ## Enforcement
 
@@ -80,6 +94,13 @@ The suite includes static scans of the shipped source and behavioral checks:
 | `output_permissions_are_private` | World-readable exports or snapshots, checked as POSIX modes on Linux and the actual DACL on Windows. |
 | `windows_acl_failure_refuses_before_writing` | Writing sensitive bytes after Windows ACL setup fails. |
 | `truncated_variable_is_recorded_not_raised` | A malformed variable aborting the run. |
+| `output_file_symlink_is_refused` | Writing through a symlinked output file (its target and mode stay untouched). |
+| `output_dir_symlink_is_refused` | Using a symlinked output directory (target not re-tightened or written into). |
+| `symlinked_parent_dir_cannot_redirect_output` | A snapshot `raw-variables` directory swapped for a symlink redirecting writes elsewhere. |
+| `hardlinked_output_is_refused` | Overwriting a hard-linked file and corrupting its other link. |
+| `existing_file_is_tightened_before_payload_write` | A `0644` file being writable by others between open and truncate. |
+| `protected_firmware_root_is_refused` | Any write destination resolving under `/sys/firmware`, by alias or `..` traversal. |
+| `cli_refuses_symlinked_output_dir` | A CLI command silently writing through a symlinked output destination. |
 
 This is a regression guard, not a formal proof. New host-I/O code still needs
 manual review.

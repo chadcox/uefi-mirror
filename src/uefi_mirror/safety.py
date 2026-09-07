@@ -5,6 +5,7 @@ import ctypes
 import errno
 import os
 import re
+import stat
 
 # efivarfs vars are kernel-capped well under this; the limit is belt-and-braces
 # against a hostile/buggy filesystem handing us an endless read.
@@ -356,8 +357,37 @@ def read_bounded(path: str, limit: int = MAX_VARIABLE_BYTES) -> bytes:
         os.close(fd)
 
 
+def _refuse_protected_root(path: str) -> None:
+    """Refuse any output destination that resolves under the kernel firmware
+    tree (/sys/firmware), before any mutation such as mkdir, chmod, truncate or
+    a payload write. Compares path components of the resolved real path, so
+    relative paths, `..`, and symlink aliases that land in the firmware tree
+    are all caught. POSIX only; the Windows tree has no such location.
+    """
+    if WINDOWS:
+        return
+    parts = os.path.realpath(os.path.abspath(path)).split(os.sep)
+    if parts[:3] == ["", "sys", "firmware"]:
+        raise PermissionError(f"{path}: writing under /sys/firmware is refused")
+
+
+def _write_all(fd: int, data: bytes) -> None:
+    remaining = memoryview(data)
+    while remaining:
+        written = os.write(fd, remaining)
+        if written == 0:
+            raise OSError("zero-byte write")
+        remaining = remaining[written:]
+
+
 def private_dir(path: str) -> str:
-    """Create a directory accessible only by its owner."""
+    """Create a directory accessible only by its owner.
+
+    POSIX: refuses a destination resolving under /sys/firmware, a final
+    symlink, and a directory owned by another user. An existing directory is
+    re-tightened to 0700 through its own descriptor (the path is not re-opened,
+    so a swapped symlink cannot be followed); a new one is created 0700.
+    """
     if WINDOWS:
         # Create the sensitive directory itself with the owner-only descriptor in
         # place (no inherited-DACL window). Non-sensitive ancestors may pre-exist
@@ -380,27 +410,62 @@ def private_dir(path: str) -> str:
         finally:
             _close_windows_handle(handle)
     else:
-        os.makedirs(path, mode=0o700, exist_ok=True)
-        os.chmod(path, 0o700)
+        _refuse_protected_root(path)
+        if os.path.islink(path):
+            raise PermissionError(
+                f"{path}: output directory is a symlink; refusing to follow")
+        if os.path.isdir(path):
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY | os.O_CLOEXEC)
+            try:
+                if os.fstat(fd).st_uid != os.getuid():
+                    raise PermissionError(
+                        f"{path}: output directory owned by another user; refusing")
+                os.fchmod(fd, 0o700)
+            finally:
+                os.close(fd)
+        else:
+            parent = os.path.dirname(os.path.abspath(path))
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            os.mkdir(path, 0o700)
     return path
 
 
 def write_private(path: str, data: bytes) -> None:
+    """Write `data` to `path` with owner-only permissions, safely.
+
+    POSIX: the file is opened without truncation and the descriptor is
+    inspected before any permission or content change - the destination must
+    not resolve under /sys/firmware, its parent directory must not be a
+    symlink, and the opened object must be a regular, non-hard-linked file
+    owned by the caller. Only then is it fchmod'd 0600 (closing the 0644
+    overwrite window) and truncated through the same descriptor. A
+    final-component symlink raises ELOOP at open.
+    """
     if WINDOWS:
         fd = _windows_fd(path, GENERIC_WRITE, OPEN_ALWAYS, os.O_WRONLY)
-    else:
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_CLOEXEC, 0o600)
-    try:
-        if WINDOWS:
+        try:
             _set_windows_private_acl(path)
             os.ftruncate(fd, 0)
-        remaining = memoryview(data)
-        while remaining:
-            written = os.write(fd, remaining)
-            if written == 0:
-                raise OSError("zero-byte write")
-            remaining = remaining[written:]
+            _write_all(fd, data)
+        finally:
+            os.close(fd)
+        return
+    _refuse_protected_root(path)
+    parent = os.path.dirname(os.path.abspath(path))
+    if parent and os.path.islink(parent):
+        raise PermissionError(f"{parent}: output directory is a symlink; refusing to follow")
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise PermissionError(f"{path}: not a regular file; refusing to write")
+        if st.st_nlink > 1:
+            raise PermissionError(f"{path}: hard-linked; refusing to write")
+        if st.st_uid != os.getuid():
+            raise PermissionError(f"{path}: owned by another user; refusing to write")
+        os.fchmod(fd, 0o600)
+        os.ftruncate(fd, 0)
+        _write_all(fd, data)
     finally:
         os.close(fd)
-    if not WINDOWS:
-        os.chmod(path, 0o600)

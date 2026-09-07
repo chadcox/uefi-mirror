@@ -7,6 +7,7 @@ import json
 import os
 import pathlib
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -63,7 +64,7 @@ FIRMWARE_SETTER_SYMBOLS = (
     "SetFirmwareEnvironmentVariableA", "NtSetSystemEnvironmentValueEx",
 )
 # The intended output mutations in safety.py; anything else there is a finding.
-SAFETY_ALLOWED_MUTATIONS = ("os.makedirs", "os.chmod", "writing os.open")
+SAFETY_ALLOWED_MUTATIONS = ("os.makedirs", "os.mkdir", "writing os.open")
 
 
 def _call_name(node):
@@ -324,6 +325,239 @@ def test_html_export_requires_output_before_reading_image():
     proc = _run_cli("export", "missing.CAP", "--format", "html")
     assert proc.returncode == 2
     assert "--output is required when --format html" in proc.stderr
+
+
+def test_output_file_symlink_is_refused():
+    if os.name == "nt":
+        return
+    with tempfile.TemporaryDirectory() as d:
+        target = os.path.join(d, "target")
+        open(target, "wb").write(b"original")
+        os.chmod(target, 0o644)
+        link = os.path.join(d, "link")
+        os.symlink(target, link)
+        try:
+            safety.write_private(link, b"secret")
+            raise AssertionError("symlinked output file was written")
+        except OSError:
+            pass
+        assert open(target, "rb").read() == b"original"
+        assert oct(os.stat(target).st_mode & 0o777) == "0o644"
+
+
+def test_output_dir_symlink_is_refused():
+    if os.name == "nt":
+        return
+    with tempfile.TemporaryDirectory() as d:
+        target = os.path.join(d, "target")
+        os.makedirs(target)
+        open(os.path.join(target, "f"), "wb").write(b"x")
+        os.chmod(target, 0o755)
+        link = os.path.join(d, "link")
+        os.symlink(target, link)
+        try:
+            safety.private_dir(link)
+            raise AssertionError("symlinked output dir was used")
+        except PermissionError:
+            pass
+        # The target must not have been re-tightened or written into.
+        assert oct(os.stat(target).st_mode & 0o777) == "0o755"
+        assert open(os.path.join(target, "f"), "rb").read() == b"x"
+
+
+def test_symlinked_parent_dir_cannot_redirect_output():
+    if os.name == "nt":
+        return
+    with tempfile.TemporaryDirectory() as d:
+        elsewhere = os.path.join(d, "elsewhere")
+        os.makedirs(elsewhere)
+        output = os.path.join(d, "output")
+        os.makedirs(output)
+        raw = os.path.join(output, "raw-variables")
+        os.symlink(elsewhere, raw)
+        path = os.path.join(raw, "Var")
+        try:
+            safety.write_private(path, b"data")
+            raise AssertionError("write redirected through symlinked parent dir")
+        except PermissionError:
+            pass
+        assert not os.path.exists(os.path.join(elsewhere, "Var"))
+        assert not os.path.exists(path)
+
+
+def test_hardlinked_output_is_refused():
+    if os.name == "nt":
+        return
+    with tempfile.TemporaryDirectory() as d:
+        real = os.path.join(d, "real")
+        open(real, "wb").write(b"original")
+        link = os.path.join(d, "link")
+        os.link(real, link)
+        try:
+            safety.write_private(link, b"data")
+            raise AssertionError("hard-linked output was written")
+        except PermissionError:
+            pass
+        assert open(real, "rb").read() == b"original"
+
+
+def test_existing_file_is_tightened_before_payload_write():
+    if os.name == "nt":
+        return
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "out")
+        open(path, "wb").write(b"old-content-that-is-longer")
+        os.chmod(path, 0o644)
+        observed = []
+        real_write = os.write
+
+        def checking(fd, data):
+            observed.append(os.fstat(fd).st_mode & 0o777)
+            return real_write(fd, data)
+
+        safety.os.write = checking
+        try:
+            safety.write_private(path, b"new")
+        finally:
+            safety.os.write = real_write
+        assert observed, "no payload write was made"
+        assert all(mode == 0o600 for mode in observed), observed
+        assert open(path, "rb").read() == b"new"
+        assert oct(os.stat(path).st_mode & 0o777) == "0o600"
+
+
+def test_hardening_failure_leaves_contents_intact():
+    if os.name == "nt":
+        return
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "out")
+        open(path, "wb").write(b"keep-me")
+        os.chmod(path, 0o644)
+        real_fchmod = os.fchmod
+
+        def refuse(_fd, _mode):
+            raise PermissionError("fchmod blocked")
+
+        safety.os.fchmod = refuse
+        try:
+            try:
+                safety.write_private(path, b"secret")
+                raise AssertionError("write proceeded despite hardening failure")
+            except PermissionError:
+                pass
+            assert open(path, "rb").read() == b"keep-me"
+        finally:
+            safety.os.fchmod = real_fchmod
+
+
+def test_other_user_output_is_refused():
+    if os.name == "nt":
+        return
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "out")
+        open(path, "wb").write(b"existing")
+        real_getuid = os.getuid
+        safety.os.getuid = lambda: 999999
+        try:
+            try:
+                safety.write_private(path, b"secret")
+                raise AssertionError("other-user file was written")
+            except PermissionError:
+                pass
+            assert open(path, "rb").read() == b"existing"
+        finally:
+            safety.os.getuid = real_getuid
+
+
+def test_non_regular_file_is_refused():
+    if os.name == "nt":
+        return
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "out")
+        open(path, "wb").write(b"existing")
+        real_fstat = os.fstat
+
+        class _FakeStat:
+            st_mode = stat.S_IFCHR  # a character device, not a regular file
+            st_nlink = 1
+            st_uid = os.getuid()
+
+        safety.os.fstat = lambda _fd: _FakeStat()
+        try:
+            try:
+                safety.write_private(path, b"secret")
+                raise AssertionError("non-regular file was written")
+            except PermissionError:
+                pass
+            assert open(path, "rb").read() == b"existing"
+        finally:
+            safety.os.fstat = real_fstat
+
+
+def test_overwrite_shorter_leaves_no_old_suffix():
+    if os.name == "nt":
+        return
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "out")
+        open(path, "wb").write(b"abcdefghij")
+        os.chmod(path, 0o600)
+        safety.write_private(path, b"xyz")
+        assert open(path, "rb").read() == b"xyz"
+        assert oct(os.stat(path).st_mode & 0o777) == "0o600"
+        fresh = os.path.join(d, "fresh")
+        safety.write_private(fresh, b"data")
+        assert open(fresh, "rb").read() == b"data"
+        assert oct(os.stat(fresh).st_mode & 0o777) == "0o600"
+
+
+def test_protected_firmware_root_is_refused():
+    if os.name == "nt":
+        return
+    # The gate is pure string logic on the resolved path: no I/O runs, which is
+    # what proves a firmware destination is refused before any mkdir/open/
+    # chmod/truncate could happen.
+    for bad in ("/sys/firmware/efi/vars/evil", "/sys/firmware",
+                "/sys/../sys/firmware/efi/x"):
+        try:
+            safety._refuse_protected_root(bad)
+            raise AssertionError(f"protected path accepted: {bad}")
+        except PermissionError:
+            pass
+    # Adjacent components must not be refused (component-boundary check).
+    safety._refuse_protected_root("/sys/firmware-evil/x")
+    safety._refuse_protected_root("/other/sys/firmware/x")
+
+
+def test_protected_firmware_symlink_alias_is_refused():
+    if os.name == "nt":
+        return
+    with tempfile.TemporaryDirectory() as d:
+        alias = os.path.join(d, "alias")
+        os.symlink("/sys/firmware", alias)
+        try:
+            safety._refuse_protected_root(os.path.join(alias, "efi", "evil"))
+            raise AssertionError("symlink alias into /sys/firmware accepted")
+        except PermissionError:
+            pass
+
+
+def test_cli_refuses_symlinked_output_dir():
+    with tempfile.TemporaryDirectory() as directory:
+        tmp = pathlib.Path(directory)
+        efivars = tmp / "efivars"
+        efivars.mkdir()
+        (efivars / GOOD).write_bytes(b"\x07\x00\x00\x00\x01\x02\x03")
+        target = tmp / "target"
+        os.makedirs(target)
+        link = tmp / "snap"
+        os.symlink(str(target), str(link))
+        proc = _run_cli("snapshot", "--output", str(link), "--efivars", str(efivars))
+        assert proc.returncode != 0
+        assert "Traceback" not in proc.stderr
+        assert "refused output" in (proc.stderr + proc.stdout)
+        # The symlink target must not have been written into.
+        assert not os.path.exists(os.path.join(target, "raw-variables"))
+        assert not os.path.exists(os.path.join(target, "manifest.json"))
 
 # ---------------------------------------------------------------- parsing
 
