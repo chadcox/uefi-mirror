@@ -121,9 +121,11 @@ def test_json_that_is_not_a_schema_is_refused():
         Schema.from_json("{oops")
 
 
-def test_a_schema_without_its_image_cannot_claim_a_board_match():
-    """A published schema does not carry the firmware, so the board-id evidence
-    is gone. It must degrade to 'unverified', never silently to 'matched'."""
+def test_a_clean_check_reads_unverified_with_or_without_the_image():
+    """Embedded board text used to upgrade a clean check to 'matched'; now the
+    image's identity is never independently verified, so the status is
+    'unverified' whether the firmware image is present or the schema was
+    loaded from JSON."""
     schema, store = _schema(), _store()
     decoded = decode.decode_all(schema.settings, store)
     dmi = {"board_name": "TEST-BOARD"}
@@ -134,9 +136,10 @@ def test_a_schema_without_its_image_cannot_claim_a_board_match():
     without_image = decode.check_compatibility(
         schema.settings, store, None, dmi, decoded, "schema.json")
 
-    assert with_image.status == "matched"
+    assert with_image.status == "unverified"
     assert without_image.status == "unverified"
     assert not without_image.problems
+    assert "image contains live board model 'TEST-BOARD'" in with_image.evidence
 
 
 def test_a_layout_mismatch_is_still_caught_without_the_image():

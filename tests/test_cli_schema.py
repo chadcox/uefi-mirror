@@ -70,10 +70,13 @@ def test_exporting_from_a_schema_file_decodes_exactly_like_the_image(tmp_path, i
 
 
 def test_exporting_from_a_schema_file_reports_reduced_evidence(tmp_path, image):
-    _, output = _export(tmp_path, "schema-export.json",
-                        "--schema", str(_schema_file(tmp_path, image)))
-    assert "matched" not in output
+    document, output = _export(tmp_path, "schema-export.json",
+                               "--schema", str(_schema_file(tmp_path, image)))
+    compatibility = document["image"]["compatibility"]
+    assert compatibility["status"] == "unverified"
     assert "no firmware image" in output
+    assert any("cannot prove the image is the installed firmware release" in e
+               for e in compatibility["evidence"])
 
 
 def test_a_schema_file_that_does_not_fit_the_machine_is_refused(tmp_path, image):

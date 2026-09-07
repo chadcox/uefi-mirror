@@ -132,16 +132,34 @@ def _live_store(payload: bytes) -> "decode.VariableStore":
     return store
 
 
-def test_compatibility_matches_embedded_board_and_live_layout():
+def test_compatibility_hints_do_not_upgrade_to_matched():
+    """Board text embedded in the image and the BIOS version in the filename
+    agree, but neither proves the image is the installed release, so the
+    status stays 'unverified' -- under both a matching and a bare filename,
+    and even when no BIOS version is installed at all."""
     image = fixtures.build_image()
     schema = builder.build({}, firmware_volume.walk(image))
     store = _live_store(bytes(0x100))
-    result = decode.check_compatibility(
+    decoded = decode.decode_all(schema.settings, store)
+    dmi = {"board_name": "Example Board", "bios_version": "1.2"}
+
+    matching_name = decode.check_compatibility(
+        schema.settings, store, image + b"Example Board", dmi, decoded, "Example-1.2.CAP")
+    bare_name = decode.check_compatibility(
+        schema.settings, store, image + b"Example Board", dmi, decoded, "unidentified.CAP")
+    no_bios_version = decode.check_compatibility(
         schema.settings, store, image + b"Example Board",
-        {"board_name": "Example Board", "bios_version": "1.2"},
-        decode.decode_all(schema.settings, store), "Example-1.2.CAP")
-    assert result.status == "matched"
-    assert not result.problems
+        {"board_name": "Example Board"}, decoded, "unidentified.CAP")
+
+    assert matching_name.status == "unverified"
+    assert bare_name.status == matching_name.status
+    assert no_bios_version.status == "unverified"
+    assert not matching_name.problems
+    assert "image contains live board model 'Example Board'" in matching_name.evidence
+    assert "filename contains installed BIOS version '1.2'" in matching_name.evidence
+    assert "installed BIOS version '1.2' is not identified by the name" in bare_name.evidence
+    assert any("cannot prove the image is the installed firmware release" in e
+               for e in matching_name.evidence)
 
 
 def test_compatibility_rejects_a_varstore_too_short_for_the_schema():

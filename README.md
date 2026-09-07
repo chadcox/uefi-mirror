@@ -135,12 +135,16 @@ $ uefi-mirror export BIOS.CAP --format html --output bios.html
 The compatibility line reports how safely the selected schema describes the
 collected variables:
 
-- `matched` — the embedded board model, installed BIOS version, variable
-  identities and sizes, and decoded enum values agree.
-- `unverified` — no portable board identity was available, but no definite
-  layout conflict was found. Treat decoded values cautiously.
+- `unverified` — no definite layout conflict was found, but nothing
+  independently verifies that the image is the installed firmware release.
+  A board model embedded in the image and a BIOS version in the filename
+  are reported as weak evidence; neither upgrades the status. Treat decoded
+  values cautiously.
 - `mismatch` — the image cannot safely describe these variables. The command
   stops before writing a report.
+
+`matched` is reserved for a future check that can verify image identity
+independently; no command emits it today.
 
 `--allow-mismatch` exists for parser research and forensic inspection, not
 normal exports. It can produce believable but incorrect setting names and
@@ -148,9 +152,10 @@ values.
 
 When decoding from a saved schema JSON, variable identities, sizes and enum
 values are still checked against the live machine. A real layout conflict still
-stops the run, but the schema cannot prove which board its source image belonged
-to, so a clean check reads `unverified` rather than `matched`. A filename can
-suggest a BIOS version and is reported as weak evidence; it is never proof.
+stops the run, and a clean check reads `unverified` whether the schema came
+from an image or from JSON, because neither can prove which board its source
+image belonged to. A filename can suggest a BIOS version and is reported as
+weak evidence; it is never proof.
 
 In this README and the CLI, “changed” means “different from the
 firmware-declared default.” It does not prove that a person changed the value.
@@ -277,7 +282,7 @@ BIOS image.
 
 ```console
 $ uefi-mirror export BIOS.CAP --changed-only
-schema compatibility: matched (...)
+schema compatibility: unverified (...)
 5376 settings, 34 differ from firmware default  (134 variables from /sys/firmware/efi/efivars)
   no_variable 693
   redacted 6
@@ -295,7 +300,8 @@ $ uefi-mirror export --schema x870e-2402.json --changed-only
 schema compatibility: unverified (schema carries no firmware image, so the board
 id behind it cannot be confirmed; filename contains installed BIOS version
 '2402'; 26/36 declared varstores are readable; 1552/1552 live enum values are
-valid)
+valid; board text and filename hints cannot prove the image is the installed
+firmware release)
 5376 settings, 34 differ from firmware default
 ```
 
@@ -522,7 +528,8 @@ hosted runner and attempts a live snapshot; the
 detected Hyper-V UEFI and collected 31 variables. Synthetic buffers still provide
 the deterministic enumeration coverage. Physical Windows validation on an ASUS
 ROG Strix X870E-E Gaming WiFi running firmware 2402 collected 137 variables and
-successfully decoded 5376 settings with a matched schema. A physical Windows
+successfully decoded 5376 settings with a clean compatibility check
+(`unverified`, no layout conflicts). A physical Windows
 before/after test changed Bluetooth Controller from Disabled to Enabled: raw
 comparison observed the expected reboot-related variable churn, while named
 comparison isolated that single setting among 2720 compared. Once dependencies

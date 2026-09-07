@@ -207,13 +207,18 @@ def check_compatibility(settings: list[Setting], store: VariableStore,
                         decoded: list["DecodedSetting"], image_name: str = "") -> Compatibility:
     """Reject schemas that cannot describe the supplied variable store.
 
-    Firmware images have no portable board-id field, so an embedded DMI model
-    is positive evidence only. Varstore absence/size and enum values catch
-    definite layout incompatibility without pretending a vendor name is proof.
+    Firmware images have no portable board-id field, so an embedded board
+    model and a BIOS version in the filename are evidence only: neither
+    proves the image is the installed firmware release. Varstore
+    absence/size and enum values catch definite layout incompatibility.
+
+    The status is 'mismatch' when a conflict is found and 'unverified'
+    otherwise. The 'matched' status is reserved for a future check that can
+    verify image identity independently; it is not emitted today.
 
     `image` is None when the schema was loaded from JSON rather than parsed
-    from firmware. Every check that can declare a mismatch still runs; only the
-    board-id evidence is unavailable, so such a schema is never 'matched'.
+    from firmware. Every check that can declare a mismatch still runs; only
+    the board-id evidence is unavailable.
     """
     required: dict[tuple[str, str], int] = {}
     for setting in settings:
@@ -247,27 +252,28 @@ def check_compatibility(settings: list[Setting], store: VariableStore,
 
     board = dmi.get("board_name", "").strip()
     if image is None:
-        board_match = False
         evidence.insert(0, "schema carries no firmware image, so the board id behind it "
                            "cannot be confirmed")
     else:
         board_bytes = board.encode("ascii", errors="ignore")
-        board_match = bool(board_bytes and (board_bytes in image
-                           or board.encode("utf-16-le") in image))
-        if board_match:
+        if board_bytes and (board_bytes in image or board.encode("utf-16-le") in image):
             evidence.insert(0, f"image contains live board model {board!r}")
         elif board:
             evidence.insert(0, f"image does not expose a comparable board id for {board!r}")
 
     version = dmi.get("bios_version", "").strip()
-    version_match = bool(version and version.casefold() in image_name.casefold())
-    if version_match:
+    if version and version.casefold() in image_name.casefold():
         evidence.insert(1, f"filename contains installed BIOS version {version!r}")
     elif version:
         evidence.insert(1, f"installed BIOS version {version!r} is not identified by the name")
 
-    identity_match = board_match and (not version or version_match)
-    status = "mismatch" if problems else "matched" if identity_match else "unverified"
+    # A clean layout check is not an identity check. Board text and filename
+    # hints are reported above as evidence, but the status stops at
+    # 'unverified' because neither proves this is the installed release.
+    status = "mismatch" if problems else "unverified"
+    if status == "unverified":
+        evidence.append("board text and filename hints cannot prove the image is the "
+                        "installed firmware release")
     return Compatibility(status, evidence, problems)
 
 
