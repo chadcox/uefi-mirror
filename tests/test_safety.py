@@ -385,6 +385,41 @@ def test_symlinked_parent_dir_cannot_redirect_output():
         assert not os.path.exists(path)
 
 
+def test_symlinked_grandparent_dir_cannot_redirect_output():
+    """A symlink above the immediate parent must also be refused: the no-follow
+    walk checks every ancestor component, not just the leaf's parent."""
+    if os.name == "nt":
+        return
+    with tempfile.TemporaryDirectory() as d:
+        elsewhere = os.path.join(d, "elsewhere")
+        os.makedirs(os.path.join(elsewhere, "real-parent"))
+        link = os.path.join(d, "output")
+        os.symlink(elsewhere, link)  # a symlinked grandparent of the file
+        path = os.path.join(link, "real-parent", "Var")
+        try:
+            safety.write_private(path, b"data")
+            raise AssertionError("write redirected through symlinked grandparent")
+        except PermissionError:
+            pass
+        assert not os.path.exists(os.path.join(elsewhere, "real-parent", "Var"))
+
+
+def test_symlinked_grandparent_dir_cannot_redirect_dir_creation():
+    if os.name == "nt":
+        return
+    with tempfile.TemporaryDirectory() as d:
+        elsewhere = os.path.join(d, "elsewhere")
+        os.makedirs(elsewhere)
+        link = os.path.join(d, "output")
+        os.symlink(elsewhere, link)
+        try:
+            safety.private_dir(os.path.join(link, "raw-variables"))
+            raise AssertionError("mkdir redirected through symlinked grandparent")
+        except PermissionError:
+            pass
+        assert not os.path.exists(os.path.join(elsewhere, "raw-variables"))
+
+
 def test_hardlinked_output_is_refused():
     if os.name == "nt":
         return

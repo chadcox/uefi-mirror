@@ -142,7 +142,7 @@ def _check_image(schema_result, store: decode.VariableStore, image: bytes | None
         raise typer.BadParameter(
             f"{prefix}schema does not match this machine's variable layout: {detail}; "
             "use --allow-mismatch to inspect it anyway")
-    style = "green" if result.status == "matched" else "yellow"
+    style = "red" if result.status == "mismatch" else "yellow"
     console.print(f"[{style}]schema compatibility: {prefix}{result.status}[/] ({detail})")
     return result
 

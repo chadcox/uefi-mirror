@@ -255,6 +255,20 @@ def test_coordinates_at_the_payload_boundary(offset, size, expected):
         assert item.value == 0x04030201
 
 
+@pytest.mark.parametrize("setting_type", ["string", "ordered_list"])
+def test_negative_length_setting_cannot_decode_as_ok(setting_type):
+    """A directly constructed string/ordered_list whose `maximum` length is
+    negative would slice an empty value and report ok; it must be out of range,
+    matching the load-time rejection of the same malformed length."""
+    setting = Setting(id="bad", name="Master Switch", type=setting_type,
+                      formset_guid="g", question_id=1, maximum=-1,
+                      varstore=VarStoreRef(str(fixtures.VARSTORE_GUID), "Setup",
+                                           0, 1, "efi"))
+    item = decode.decode_setting(setting, _live_store(b"\x00\x00\x00\x01"))
+    assert item.status == decode.OUT_OF_RANGE
+    assert item.value is None
+
+
 def test_passwords_are_never_read_out():
     setting = Setting(id="x", name="Administrator Password", type="password",
                       formset_guid="g", question_id=1,

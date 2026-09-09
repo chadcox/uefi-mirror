@@ -380,13 +380,50 @@ def _write_all(fd: int, data: bytes) -> None:
         remaining = remaining[written:]
 
 
+def _nofollow_parent_fd(path: str) -> int:
+    """POSIX: open the directory that will contain `path`, refusing to traverse
+    any symlink on the way. Walks the absolute path's directory components from
+    the root, opening each with O_NOFOLLOW|O_DIRECTORY, so a symlinked component
+    at ANY depth -- not just the immediate parent -- raises rather than
+    redirecting the write. The parent directory must already exist. Returns a
+    dir fd the caller must close; final operations are anchored to it with
+    dir_fd= so no path is re-resolved after this check.
+    """
+    parent = os.path.dirname(os.path.abspath(path))
+    dir_fd = os.open(os.sep, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    try:
+        for part in parent.split(os.sep):
+            if not part:
+                continue
+            try:
+                nxt = os.open(part, os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY
+                              | os.O_CLOEXEC, dir_fd=dir_fd)
+            except OSError as exc:
+                # ELOOP: a symlink refused by O_NOFOLLOW. ENOTDIR: O_DIRECTORY on
+                # a symlink (kernel reports the leaf isn't a dir) or a real file
+                # standing in for a directory. Either way, refuse to traverse it.
+                if exc.errno in (errno.ELOOP, errno.ENOTDIR):
+                    raise PermissionError(
+                        f"{path}: output path traverses a symlinked or non-directory "
+                        "component; refusing to follow") from exc
+                raise
+            os.close(dir_fd)
+            dir_fd = nxt
+        return dir_fd
+    except BaseException:
+        os.close(dir_fd)
+        raise
+
+
 def private_dir(path: str) -> str:
     """Create a directory accessible only by its owner.
 
     POSIX: refuses a destination resolving under /sys/firmware, a final
-    symlink, and a directory owned by another user. An existing directory is
-    re-tightened to 0700 through its own descriptor (the path is not re-opened,
-    so a swapped symlink cannot be followed); a new one is created 0700.
+    symlink or one anywhere in the ancestor chain, and a directory owned by
+    another user. Both the create and the re-tighten are anchored to a parent
+    descriptor opened with no-follow on every component, so a swapped symlink
+    -- at any depth -- cannot be followed. A new directory is created 0700; an
+    existing one is re-tightened to 0700 through its own descriptor.
     """
     if WINDOWS:
         # Create the sensitive directory itself with the owner-only descriptor in
@@ -411,23 +448,33 @@ def private_dir(path: str) -> str:
             _close_windows_handle(handle)
     else:
         _refuse_protected_root(path)
-        if os.path.islink(path):
-            raise PermissionError(
-                f"{path}: output directory is a symlink; refusing to follow")
-        if os.path.isdir(path):
-            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY | os.O_CLOEXEC)
+        parent = os.path.dirname(os.path.abspath(path))
+        if parent and not os.path.isdir(parent):
+            os.makedirs(parent, exist_ok=True)
+        name = os.path.basename(os.path.normpath(path))
+        parent_fd = _nofollow_parent_fd(path)
+        try:
             try:
-                if os.fstat(fd).st_uid != os.getuid():
+                dir_fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY
+                                 | os.O_CLOEXEC, dir_fd=parent_fd)
+            except FileNotFoundError:
+                os.mkdir(name, 0o700, dir_fd=parent_fd)
+            except OSError as exc:
+                if exc.errno in (errno.ELOOP, errno.ENOTDIR):
                     raise PermissionError(
-                        f"{path}: output directory owned by another user; refusing")
-                os.fchmod(fd, 0o700)
-            finally:
-                os.close(fd)
-        else:
-            parent = os.path.dirname(os.path.abspath(path))
-            if parent:
-                os.makedirs(parent, exist_ok=True)
-            os.mkdir(path, 0o700)
+                        f"{path}: output directory is a symlink or not a directory; "
+                        "refusing to follow") from exc
+                raise
+            else:
+                try:
+                    if os.fstat(dir_fd).st_uid != os.getuid():
+                        raise PermissionError(
+                            f"{path}: output directory owned by another user; refusing")
+                    os.fchmod(dir_fd, 0o700)
+                finally:
+                    os.close(dir_fd)
+        finally:
+            os.close(parent_fd)
     return path
 
 
@@ -436,11 +483,12 @@ def write_private(path: str, data: bytes) -> None:
 
     POSIX: the file is opened without truncation and the descriptor is
     inspected before any permission or content change - the destination must
-    not resolve under /sys/firmware, its parent directory must not be a
-    symlink, and the opened object must be a regular, non-hard-linked file
-    owned by the caller. Only then is it fchmod'd 0600 (closing the 0644
-    overwrite window) and truncated through the same descriptor. A
-    final-component symlink raises ELOOP at open.
+    not resolve under /sys/firmware, no directory in its path may be a symlink
+    (checked with a no-follow walk anchored to a parent descriptor), and the
+    opened object must be a regular, non-hard-linked file owned by the caller.
+    Only then is it fchmod'd 0600 (closing the 0644 overwrite window) and
+    truncated through the same descriptor. A final-component symlink raises
+    ELOOP at open.
     """
     if WINDOWS:
         fd = _windows_fd(path, GENERIC_WRITE, OPEN_ALWAYS, os.O_WRONLY)
@@ -452,10 +500,13 @@ def write_private(path: str, data: bytes) -> None:
             os.close(fd)
         return
     _refuse_protected_root(path)
-    parent = os.path.dirname(os.path.abspath(path))
-    if parent and os.path.islink(parent):
-        raise PermissionError(f"{parent}: output directory is a symlink; refusing to follow")
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    name = os.path.basename(os.path.normpath(path))
+    parent_fd = _nofollow_parent_fd(path)
+    try:
+        fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC,
+                     0o600, dir_fd=parent_fd)
+    finally:
+        os.close(parent_fd)
     try:
         st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode):

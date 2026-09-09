@@ -357,6 +357,10 @@ def decode_setting(setting: Setting, store: VariableStore) -> DecodedSetting:
             or (ref.size is not None
                 and (not isinstance(ref.size, int) or ref.size <= 0))):
         return DecodedSetting(setting, OUT_OF_RANGE)
+    # For these types `maximum` is a character/entry count sliced by, not a
+    # value bound; a negative one is a malformed length, not a signed minimum.
+    if setting.type in ("string", "ordered_list") and (setting.maximum or 0) < 0:
+        return DecodedSetting(setting, OUT_OF_RANGE)
     size = ref.size or 1
     if setting.type == "string":
         chars = setting.maximum or 0
