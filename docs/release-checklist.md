@@ -9,7 +9,9 @@ are covered by the repository or the recorded reference-system validation.
 - [x] Standalone read-only safety suite passes.
 - [x] Ruff lint passes.
 - [x] Physical Windows UEFI enumeration succeeds with Administrator elevation.
-- [x] ASUS ROG Strix X870E-E Gaming WiFi firmware 2402 produces a matched schema.
+- [x] ASUS ROG Strix X870E-E Gaming WiFi firmware 2402 produces a schema with
+  no layout conflicts (the compatibility check reports `unverified`;
+  `matched` is reserved for a future identity check).
 - [x] All 1552 statically decodable live enum values are declared by the image.
 - [x] Dynamic `BootOrder` and `PlatformLang` questions are not treated as scalar
   enum mismatches.

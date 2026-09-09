@@ -26,8 +26,12 @@ groups**, and narrows the 34 that differ from firmware-declared defaults down to
 the **4** that are currently visible in setup.
 
 **Strictly read-only.** No code path creates, modifies, deletes, unlocks or
-writes a UEFI variable or SPI flash region. Enforced by static scans of the
-shipped source, not by convention — see [`docs/safety.md`](docs/safety.md).
+writes a UEFI variable or SPI flash region. The claim is backed by a test
+suite of static scans and behavioral checks rather than convention; it is a
+regression guard, not a formal proof. The only filesystem writes the tool
+ever performs are the output files and snapshot directories you name on the
+command line, and those go through the two guarded helpers described in
+[`docs/safety.md`](docs/safety.md).
 
 ## Who this is for
 
@@ -248,10 +252,16 @@ Snapshot: 134 variables -> before/
 ```
 
 Writes every readable variable plus a manifest with sizes, attributes and
-SHA-256. Linux uses directory mode `0700` and file mode `0600`; Windows uses a
-verified, protected owner-only DACL. Feed it to `export --snapshot` or `diff`
-later. **Do not commit it** — raw variables contain boot paths and machine
-identifiers.
+SHA-256. On Linux a destination that is (or passes through) a symlink, is a
+hard-linked file, is owned by another user, or resolves under `/sys/firmware`
+is refused before any write; new files start `0600` and directories `0700`,
+and an existing file is tightened to `0600` through its own open descriptor
+before it is truncated. On Windows the tree is created with a protected,
+non-inheriting owner-only DACL that is read back and verified before payload
+bytes are written; junctions and reparse points are refused.
+`docs/safety.md` states the exact guarantees and their limits. Feed it to
+`export --snapshot` or `diff` later. **Do not commit it** — raw variables
+contain boot paths and machine identifiers.
 
 ### `schema` — what does each setting *mean*?
 
@@ -316,9 +326,13 @@ uefi-mirror export BIOS.CAP --format html --output bios.html
 When given a firmware image, `export` checks for an embedded board-model and
 BIOS-version match. Both image and saved-schema workflows validate declared
 variable GUIDs, minimum sizes, and enum values against the collected variables.
-
-Files created with `--output` use `0600` on Linux or a verified owner-only DACL
-on Windows.
+On Linux, an `--output` destination that is (or passes through) a symlink, a
+hard-linked file, owned by another user, or resolving under `/sys/firmware` is
+refused before any write; new files start `0600` and an existing one is
+tightened to `0600` through its own open descriptor before truncation. On
+Windows the file is created with a protected, non-inheriting owner-only DACL
+that is read back and verified before payload bytes are written, and reparse
+points are refused.
 `--grep`, `--changed-only`, `--visible-only`, and `--include-inactive` filter
 terminal and text rows; archival JSON remains complete. HTML embeds every
 setting and uses those flags only as initial UI filters.
@@ -423,6 +437,7 @@ A schema JSON document — what `schema --output` writes and what `export
 --schema` / `diff --schema` read — is self-contained: each condition carries the IFR
 expression bytes (`code`, base64) alongside its human-readable form, so a
 schema parsed on one machine and reloaded on another evaluates visibility
+identically. `Schema.from_json()` refuses a document whose `format_version`
 is not the one this parser writes, and refuses malformed fields rather than
 loading a partial schema. Storage coordinates are validated strictly: a
 negative or boolean offset, a field width outside the 1/2/4/8-byte IFR set, a
