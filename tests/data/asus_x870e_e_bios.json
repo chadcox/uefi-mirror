@@ -1,0 +1,72 @@
+{
+  "_fixture": {
+    "source": "https://www.asus.com/support/webapi/ProductV2/GetPDBIOS?website=global&model=rog%20strix%20x870e-e%20gaming%20wifi&pdhashedid=&pdid=99999&cpu=&siteID=www&sitelang=",
+    "retrieved": "2026-09-09",
+    "note": "Sanitized to the fields and records needed for offline contract tests."
+  },
+  "Status": "SUCCESS",
+  "Message": "SUCCESS",
+  "Result": {
+    "Count": 34,
+    "Model": "ROG STRIX X870E-E GAMING WIFI",
+    "Obj": [
+      {
+        "Name": "BIOS",
+        "Count": 1,
+        "Files": [
+          {
+            "Version": "2402",
+            "ReleaseDate": "2026/07/15",
+            "IsRelease": "1",
+            "DownloadUrl": {
+              "Global": "/pub/ASUS/mb/BIOS/ROG-STRIX-X870E-E-GAMING-WIFI-ASUS-2402.ZIP"
+            },
+            "sha256": "AE633A16F92774AB130203417B770F12FAB48F0EA4A9BE357F0137FF9205A825"
+          },
+          {
+            "Version": "2401",
+            "ReleaseDate": "2026/06/26",
+            "IsRelease": "0",
+            "DownloadUrl": {
+              "Global": "/pub/ASUS/mb/BIOS/ROG-STRIX-X870E-E-GAMING-WIFI-ASUS-2401.ZIP"
+            },
+            "sha256": "D26C830A48DEF3BBB741ABA75E1563B76B712F92B609F13F2BDB1079159D17D5"
+          },
+          {
+            "Version": "1701",
+            "ReleaseDate": "2025/08/29",
+            "IsRelease": "1",
+            "DownloadUrl": {
+              "Global": "/pub/ASUS/mb/BIOS/ROG-STRIX-X870E-E-GAMING-WIFI-ASUS-1701.zip"
+            },
+            "sha256": "7FB69AC28B638ED36FE20CA266CBBF6950B37818B9E01019F0954FC8C5796620"
+          },
+          {
+            "Version": "0706",
+            "ReleaseDate": "2024/12/05",
+            "IsRelease": "1",
+            "DownloadUrl": {
+              "Global": "/pub/ASUS/mb/BIOS/ROG-STRIX-X870E-E-GAMING-WIFI-ASUS-0706.zip"
+            },
+            "sha256": ""
+          }
+        ]
+      },
+      {
+        "Name": "Firmware",
+        "Count": 1,
+        "Files": [
+          {
+            "Version": "40013",
+            "ReleaseDate": "2024/12/16",
+            "IsRelease": "1",
+            "DownloadUrl": {
+              "Global": "/pub/ASUS/mb/SocketAM5/ROG_STRIX_X870E-E_GAMING_WIFI/ASMx424X_FWUpdateV40013.zip"
+            },
+            "sha256": ""
+          }
+        ]
+      }
+    ]
+  }
+}
