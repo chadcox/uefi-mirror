@@ -109,8 +109,11 @@ def parse_asus_metadata(data: bytes, product: Product) -> list[Release]:
     categories = result.get("Obj")
     if not isinstance(categories, list):
         raise ValueError("ASUS metadata Result.Obj must be an array")
-    bios_categories = [item for item in categories if isinstance(item, dict)
-                       and _text(item.get("Name")).casefold() == "bios"]
+    bios_categories = []
+    for item in categories:
+        category = _mapping(item, "Result.Obj entry")
+        if _required_text(category, "Name").casefold() == "bios":
+            bios_categories.append(category)
     if len(bios_categories) != 1:
         raise ValueError(f"ASUS metadata contains {len(bios_categories)} BIOS categories")
     files = bios_categories[0].get("Files")
@@ -133,7 +136,10 @@ def parse_asus_metadata(data: bytes, product: Product) -> list[Release]:
         path = _required_text(urls, "Global")
         if not path.startswith("/pub/ASUS/mb/BIOS/") or path.startswith("//"):
             raise ValueError(f"ASUS BIOS {version} has an unexpected download path")
-        checksum = _text(record.get("sha256")) or None
+        raw_checksum = record.get("sha256", "")
+        if not isinstance(raw_checksum, str):
+            raise ValueError(f"ASUS BIOS {version} has an invalid SHA-256")
+        checksum = _text(raw_checksum) or None
         if checksum is not None:
             try:
                 valid_checksum = len(checksum) == 64 and len(bytes.fromhex(checksum)) == 32

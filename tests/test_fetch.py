@@ -85,6 +85,9 @@ def test_identical_records_are_deduplicated():
      "invalid SHA-256"),
     (lambda doc: doc["Result"]["Obj"][0]["Files"][0]["DownloadUrl"].update(
         Global="https://example.invalid/bios.zip"), "unexpected download path"),
+    (lambda doc: doc["Result"]["Obj"][0]["Files"][0].update(sha256=7),
+     "invalid SHA-256"),
+    (lambda doc: doc["Result"]["Obj"].append(1), "Result.Obj entry must be an object"),
 ])
 def test_changed_or_unsafe_metadata_shape_fails_closed(mutation, match):
     product, _ = _records()
