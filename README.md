@@ -595,6 +595,43 @@ $ python tests/test_safety.py  # safety suite, no pytest needed
 $ ruff check .
 ```
 
+### Manual fetch smoke test
+
+Fetching is read-only with respect to firmware, but it uses the network and
+writes the output directory you name. First resolve the reviewed release
+without downloading or writing files:
+
+```console
+$ uefi-mirror fetch --manufacturer ASUS \
+    --model "ROG STRIX X870E-E GAMING WIFI" --bios-version 2402 \
+    --resolve-only --json | python -m json.tool
+```
+
+The result should have `operation: "resolve"`, release `2402`, and publisher
+checksum status `advertised`. Then use a missing or empty directory to exercise
+download, checksum, archive, parser, and private-output validation:
+
+```console
+$ uefi-mirror fetch --manufacturer ASUS \
+    --model "ROG STRIX X870E-E GAMING WIFI" --bios-version 2402 \
+    --output firmware-test-2402
+$ python -m json.tool firmware-test-2402/fetch.json
+$ uefi-mirror schema \
+    firmware-test-2402/ROG-STRIX-X870E-E-GAMING-WIFI-ASUS-2402.CAP
+```
+
+For the validated 2402 artifact, `fetch.json` reports publisher checksum
+`verified` against the downloaded ZIP, a 33,558,528-byte image, 5,376 settings,
+and installed-firmware identity `unverified`. The schema command reports 5,376
+settings in 15 form sets. The artifact checksum and successful parse do not
+prove that release 2402 is installed; confirm the machine's exact model,
+revision, and BIOS version independently before using the image for export.
+
+Automatic detection may deliberately refuse an OEM/prebuilt system even when
+its board name resembles the supported retail ASUS model. Use explicit
+identity overrides only after confirming that retail-board identity; refusal
+is safer than silently selecting incompatible firmware.
+
 CI runs this offline suite on Python 3.12 and 3.13 on both `ubuntu-latest` and
 `windows-latest`, including fetch transport/archive tests and native Windows
 DACL and junction checks. A non-gating Windows smoke step also probes the
