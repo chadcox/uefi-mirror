@@ -110,10 +110,25 @@ rerun live commands from an elevated Administrator terminal when it does.
 
 ### 2. Obtain the matching firmware image
 
-Download the BIOS update for that exact motherboard model, revision, and
-installed firmware version from the motherboard or system vendor. Extract the
-downloaded archive and pass its `.CAP`, `.ROM`, `.BIN`, or vendor-named raw image
-to `uefi-mirror`. The extension does not matter; both capsule-wrapped updates
+For the ASUS ROG Strix X870E-E Gaming WiFi, `fetch` can resolve the exact
+installed release from ASUS and save a validated image plus `fetch.json`:
+
+```console
+$ uefi-mirror fetch --output firmware/
+Fetched 2402 to firmware/ROG-STRIX-X870E-E-GAMING-WIFI-ASUS-2402.CAP
+Provenance written to firmware/fetch.json
+```
+
+This is an explicit network operation. It supports exactly that retail ASUS
+model today; OEM/prebuilt ambiguity, missing identity, and unsupported models
+fail with instructions for explicit options or the manual workflow. To inspect
+the selected release without downloading it or writing files, use
+`uefi-mirror fetch --resolve-only --json` (this still contacts ASUS).
+
+For other boards, download the BIOS update for the exact motherboard model,
+revision, and installed firmware version from the motherboard or system vendor.
+Extract the archive and pass its `.CAP`, `.ROM`, `.BIN`, or vendor-named raw
+image to `uefi-mirror`. The extension does not matter; capsule-wrapped updates
 and raw SPI images are detected from their contents.
 
 Do not substitute an image merely because it comes from the same manufacturer
@@ -229,6 +244,40 @@ live variables and therefore cannot verify that the image matches a machine.
 given one and against the schema's own declarations when given `--schema`.
 
 ## Command reference
+
+### `fetch` — retrieve one supported official image
+
+```console
+$ uefi-mirror fetch --manufacturer ASUS \
+    --model "ROG STRIX X870E-E GAMING WIFI" --bios-version 2402 \
+    --output firmware/
+```
+
+`fetch` is the only networked command. It resolves one exact release from a
+reviewed official product mapping, verifies the publisher's SHA-256 when
+available, accepts a direct image or bounded ZIP, and requires the existing
+parser to find settings before writing. It never flashes firmware, executes
+vendor tools, or collects UEFI variables. Use `--snapshot` to resolve from a
+validated snapshot's DMI identity; local DMI is never substituted when that
+snapshot lacks identity.
+
+The output directory must be missing or empty and safe. A successful download
+contains only the original firmware-image basename and `fetch.json`, both
+private. The manifest records URLs, selected and detected identity, artifact
+and image hashes, checksum scope, and parsing results. Successful parsing and a
+verified download checksum do **not** prove that the image is the firmware
+installed on the machine; that status remains `unverified`.
+
+Network limits are 4 MiB metadata, 128 MiB artifact, 64 MiB extracted image,
+128 ZIP entries, 256 MiB total advertised ZIP contents, 5 redirects per
+request, 20 resolution requests, a 15-second socket timeout, and a 180-second
+whole-fetch deadline. Only HTTPS on port 443 to the reviewed ASUS metadata and
+artifact hosts is allowed. Ambient proxy discovery is disabled in this first
+release. See [`docs/safety.md`](docs/safety.md) for the exact boundary.
+
+Machine-readable modes emit one JSON object. `fetch --resolve-only --json`
+reports the selected release without downloading. `fetch -o firmware/ --json`
+includes saved paths and the same format-1 provenance written to `fetch.json`.
 
 ### `probe` — what is this machine?
 
@@ -481,12 +530,19 @@ the schema, decode, export, and diff pipeline is shared.
 | Schema | `schema/` | Menu paths, options, defaults, stable setting ids |
 | Values | `decode.py` | Read variables, decode by offset, resolve CPU-family variants |
 | Diff | `diff.py` | Compare variables and named settings |
+| Fetch | `fetch.py` + `safety.py` | Resolve one supported official release; retrieve and validate it within fixed network/archive limits |
 
 ## Firmware-image support
 
 The 1.0 hardware support scope is the ASUS ROG Strix X870E-E Gaming WiFi with
 firmware 2402. The other entries below are parser coverage for post-1.0 hardware
 validation, not 1.0 support claims.
+
+Automatic retrieval is narrower than parser support: it currently supports
+only the retail ASUS ROG Strix X870E-E Gaming WiFi. The official release-2402
+path was revalidated on 2026-09-10: ASUS's published SHA-256 matched the
+19,203,110-byte ZIP, its 33,558,528-byte CAP produced 5,376 settings, and
+installed-firmware identity remained explicitly `unverified`.
 
 | Image family | Support |
 |---|---|
@@ -539,8 +595,9 @@ $ python tests/test_safety.py  # safety suite, no pytest needed
 $ ruff check .
 ```
 
-CI runs this suite on `ubuntu-latest` and `windows-latest`, including native
-Windows DACL and junction checks. A non-gating Windows smoke step also probes the
+CI runs this offline suite on Python 3.12 and 3.13 on both `ubuntu-latest` and
+`windows-latest`, including fetch transport/archive tests and native Windows
+DACL and junction checks. A non-gating Windows smoke step also probes the
 hosted runner and attempts a live snapshot; the
 [2026-09-01 validation run](https://github.com/chadcox/uefi-mirror/actions/runs/33569671960)
 detected Hyper-V UEFI and collected 31 variables. Synthetic buffers still provide

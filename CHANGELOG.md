@@ -6,6 +6,18 @@ All notable changes to `uefi-mirror` are documented here.
 
 Behavior changes since 1.0.0, pending the next release.
 
+### Added
+
+- **Official BIOS image retrieval for one reviewed ASUS model.** The new
+  opt-in `fetch` command resolves an exact ROG Strix X870E-E Gaming WiFi release
+  from official ASUS metadata, downloads through a bounded HTTPS-only client,
+  verifies the published SHA-256 when present, safely selects a direct or ZIP
+  image, and requires usable parsed settings before writing the image and a
+  format-1 `fetch.json` provenance record. `--snapshot`, explicit identity and
+  version overrides, `--resolve-only`, and clean JSON output are supported.
+  Fetching never flashes firmware or upgrades compatibility beyond
+  `unverified`; other vendors and ASUS models retain the manual-image workflow.
+
 ### Changed
 
 - **Output writes are refused in more cases on Linux.** Output files and

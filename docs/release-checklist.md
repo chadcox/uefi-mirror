@@ -42,6 +42,17 @@ are covered by the repository or the recorded reference-system validation.
 
 ## Post-1.0 coverage
 
+- [x] The opt-in ASUS fetch path was live-smoked on 2026-09-10 against the
+  [official support page](https://www.asus.com/supportonly/rog%20strix%20x870e-e%20gaming%20wifi/helpdesk_bios/)
+  and its public metadata endpoint for the exact ROG Strix X870E-E Gaming WiFi
+  2402 release. The official 19,203,110-byte ZIP
+  matched published SHA-256
+  `ae633a16f92774ab130203417b770f12fab48f0ea4a9be357f0137ff9205a825`;
+  its 33,558,528-byte CAP produced 5,376 settings. Installed-firmware identity
+  remained `unverified`, and neither artifact nor host data was committed.
+- [x] Fetch tests are offline and included in the existing Linux/Windows,
+  Python 3.12/3.13 CI matrix.
+
 - [ ] Validate live decoding on physical Gigabyte or MSI hardware with the
   matching firmware image before claiming support for either platform.
 - [ ] Validate physical Windows collection on at least one additional board.

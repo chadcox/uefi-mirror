@@ -6,7 +6,7 @@ commitments.
 
 ## Machine-readable formats
 
-Schema JSON, snapshot manifests, and export JSON carry their own integer
+Schema JSON, snapshot manifests, export JSON, and fetch documents carry their own integer
 `format_version`. These versions are independent of the package version.
 
 - Readers accept only format versions they understand and fail before producing
@@ -19,16 +19,30 @@ Schema JSON, snapshot manifests, and export JSON carry their own integer
 - A saved schema must decode and evaluate visibility identically after a
   serialize/reload round trip with the same tool version.
 
-Snapshot format 1 and schema/export format 3 are the current formats. Snapshots
-and exports can contain machine identifiers or boot paths and should be treated
-as private. Schema JSON contains firmware definitions but no collected values.
+Snapshot and fetch formats are 1; schema/export format is 3. Snapshots and
+exports can contain machine identifiers or boot paths and should be treated as
+private. Fetch provenance contains selected and available DMI identity plus
+source URLs and hashes, but no raw firmware variables. Schema JSON contains
+firmware definitions but no collected values.
+
+`fetch.json` is an audit record, not a trusted input to another command.
+Existing commands parse the image path supplied by the user and do not load the
+manifest. A successful `fetch --json` wrapper has `operation: "fetch"`, saved
+paths, and its format-1 provenance; `fetch --resolve-only --json` has
+`operation: "resolve"` and selection metadata but no saved paths or computed
+artifact/image hashes. Neither shape claims the downloaded image is the
+installed firmware release.
 
 ## CLI contract
 
-The public commands are `probe`, `snapshot`, `schema`, `export`, and `diff`.
+The public commands are `probe`, `fetch`, `snapshot`, `schema`, `export`, and `diff`.
 `--help` and `--version` are stable discovery interfaces. Exit status zero means
 the requested operation completed; invalid input, unsafe output, unavailable
 enumeration, and definite schema mismatch return nonzero.
+
+Only `fetch` uses the network, and only when explicitly invoked. `--resolve-only`
+still retrieves official metadata but performs no artifact request or filesystem
+write. All other commands remain offline.
 
 New commands, options, output fields, and status values may be added in minor
 releases when existing consumers can safely ignore them. A breaking CLI or

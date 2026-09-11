@@ -47,6 +47,42 @@ Snapshots are trusted inputs only after their whole manifest is validated:
 version and types, safe matching filenames, duplicate rejection, payload size,
 and SHA-256. Structural or integrity errors abort the snapshot load.
 
+## Network reads
+
+Only the explicit `fetch` command uses the network. It sends a plain
+`uefi-mirror/<version>` user agent and reviewed product metadata; it does not
+send snapshots, raw variables, serial numbers, cookies, or authentication
+tokens. Ambient proxy discovery is disabled, so enterprise proxies are not
+supported in this release.
+
+The client permits HTTPS on port 443 only, with normal certificate validation,
+no URL credentials, and exact allowlists for the reviewed ASUS metadata and
+artifact hosts. It validates every redirect before following it and refuses IP
+literals, localhost, unapproved hosts, and HTTPS-to-HTTP downgrades. Limits are:
+
+| Resource | Limit |
+|---|---:|
+| Metadata body | 4 MiB |
+| Downloaded artifact | 128 MiB |
+| Extracted image | 64 MiB |
+| Redirects | 5 per request |
+| Resolution requests | 20 |
+| Socket timeout | 15 seconds |
+| Whole fetch | 180 seconds |
+| ZIP entries | 128 |
+| Advertised ZIP contents | 256 MiB total |
+
+Declared and actual body sizes are checked, unsupported HTTP encodings are
+rejected, and responses are closed on failure. ZIP members are inspected in
+memory; paths, duplicates, links, encryption, unsupported compression, and
+ambiguous firmware members are refused. Vendor executables and renamers are
+never read from the archive or run.
+
+These controls bound an official-source client. They do not make a compromised
+vendor server or local DNS trustworthy. A verified publisher checksum proves
+only that the downloaded bytes match the checksum's documented target; parsing
+settings does not prove those bytes are installed on the machine.
+
 ## Writes that do happen
 
 Exactly two functions mutate the filesystem, `safety.write_private` (file
@@ -72,6 +108,12 @@ place — exactly one full-access ACE for their owner, no inheritance — so the
 is no window in which an inherited DACL applies; the ACL is then read back and
 verified before any payload bytes are written. Windows junctions and other
 reparse points are refused rather than followed.
+
+Before networking, `fetch` additionally requires its output directory to be
+missing or empty and safe, then repeats that check after validation. It writes
+the image first and `fetch.json` last. This prevents ordinary overwrite mistakes
+but is not a transactional concurrent-writer guarantee; a failed save can leave
+a partial output, which the command reports.
 
 ## Enforcement
 
