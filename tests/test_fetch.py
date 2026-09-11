@@ -55,6 +55,93 @@ def test_leading_zeroes_are_part_of_the_exact_version():
         fetch.select_release(releases, "706")
 
 
+def test_dmi_identity_resolves_the_installed_release_without_rewriting_facts():
+    product, releases = _records()
+    selection = fetch.resolve_identity({
+        "sys_vendor": " ASUSTeK  COMPUTER INC. ",
+        "product_name": "System Product Name",
+        "board_vendor": "ASUSTeK COMPUTER INC.",
+        "board_name": " ROG  STRIX X870E-E GAMING WIFI ",
+        "board_version": " Rev 1.xx ",
+        "bios_version": " 2402 ",
+    })
+
+    assert selection.detected_identity == {
+        "sys_vendor": "ASUSTeK COMPUTER INC.",
+        "board_vendor": "ASUSTeK COMPUTER INC.",
+        "board_name": product.model,
+        "board_version": "Rev 1.xx",
+        "bios_version": "2402",
+    }
+    assert selection.overrides == {}
+    assert selection.selected_identity == fetch.Identity(
+        "ASUS", product.model, "2402", "Rev 1.xx")
+    assert fetch.resolve_release(selection, releases).version == "2402"
+
+
+def test_explicit_identity_works_when_dmi_is_missing_or_placeholder():
+    selection = fetch.resolve_identity(
+        {"sys_vendor": "System manufacturer", "board_name": "Default string"},
+        manufacturer="asus", model="rog strix x870e-e gaming wifi",
+        bios_version="0706", revision=" 1.0 ",
+    )
+
+    assert selection.detected_identity == {}
+    assert selection.overrides == {
+        "manufacturer": "ASUS",
+        "model": "rog strix x870e-e gaming wifi",
+        "revision": "1.0",
+        "bios_version": "0706",
+    }
+    assert selection.selected_identity.bios_version == "0706"
+
+
+def test_oem_board_identity_requires_complete_explicit_selection():
+    dmi = {
+        "sys_vendor": "Dell Inc.", "product_name": "Alienware",
+        "board_vendor": "ASUSTeK COMPUTER INC.",
+        "board_name": "ROG STRIX X870E-E GAMING WIFI", "bios_version": "2402",
+    }
+    with pytest.raises(ValueError, match="system vendor.*differs from board vendor"):
+        fetch.resolve_identity(dmi)
+
+    selection = fetch.resolve_identity(
+        dmi, manufacturer="ASUS", model="ROG STRIX X870E-E GAMING WIFI",
+        bios_version="2402")
+    assert selection.selected_identity.manufacturer == "ASUS"
+
+
+def test_different_model_override_requires_its_own_version():
+    dmi = {
+        "board_vendor": "ASUS", "board_name": "ANOTHER BOARD",
+        "bios_version": "9999",
+    }
+    with pytest.raises(ValueError, match="--bios-version is required"):
+        fetch.resolve_identity(
+            dmi, manufacturer="ASUS", model="ROG STRIX X870E-E GAMING WIFI")
+
+
+@pytest.mark.parametrize("dmi,match", [
+    ({}, "--manufacturer, --model, --bios-version"),
+    ({"board_vendor": "ASUS", "board_name": "ROG STRIX X870E-E GAMING WIFI"},
+     "--bios-version"),
+    ({"board_vendor": "ASUS", "bios_version": "2402"}, "--model"),
+])
+def test_incomplete_identity_reports_the_required_overrides(dmi, match):
+    with pytest.raises(ValueError, match=match):
+        fetch.resolve_identity(dmi)
+
+
+def test_cross_product_release_list_is_rejected():
+    selection = fetch.resolve_identity(
+        {}, manufacturer="ASUS", model="ROG STRIX X870E-E GAMING WIFI",
+        bios_version="2402")
+    other = replace(_records()[1][0], product_id="another product")
+
+    with pytest.raises(ValueError, match="different product"):
+        fetch.resolve_release(selection, [other])
+
+
 def test_missing_and_ambiguous_releases_fail_instead_of_selecting_latest():
     _, releases = _records()
     with pytest.raises(ValueError, match="no BIOS release exactly matching"):

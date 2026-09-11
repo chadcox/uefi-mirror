@@ -15,6 +15,25 @@ _VENDOR_ALIASES = {
     "asustek computer inc.": "ASUS",
 }
 
+_DMI_FIELDS = (
+    "sys_vendor", "product_name", "board_vendor", "board_name",
+    "board_version", "bios_vendor", "bios_version", "bios_date", "bios_release",
+)
+_DMI_PLACEHOLDERS = frozenset({
+    "base board product name",
+    "default string",
+    "n/a",
+    "none",
+    "not applicable",
+    "not specified",
+    "oem",
+    "system manufacturer",
+    "system product name",
+    "to be filled by o.e.m.",
+    "to be filled by oem",
+    "unknown",
+})
+
 
 @dataclass(frozen=True)
 class Product:
@@ -48,6 +67,22 @@ class Release:
     publisher_checksum_target: str = "artifact"
 
 
+@dataclass(frozen=True)
+class Identity:
+    manufacturer: str
+    model: str
+    bios_version: str
+    revision: str | None = None
+
+
+@dataclass(frozen=True)
+class IdentitySelection:
+    detected_identity: dict[str, str]
+    overrides: dict[str, str]
+    selected_identity: Identity
+    product: Product
+
+
 _X870E_E = Product(
     manufacturer="ASUS",
     model="ROG STRIX X870E-E GAMING WIFI",
@@ -71,12 +106,82 @@ def _vendor(value: object) -> str:
     return _VENDOR_ALIASES.get(cleaned.casefold(), cleaned)
 
 
+def _dmi_text(value: object) -> str:
+    cleaned = _text(value)
+    return "" if cleaned.casefold() in _DMI_PLACEHOLDERS else cleaned
+
+
+def _override(name: str, value: str | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = _text(value)
+    if not cleaned:
+        raise ValueError(f"--{name} cannot be blank")
+    return _vendor(cleaned) if name == "manufacturer" else cleaned
+
+
 def supported_model(manufacturer: str, model: str) -> Product:
     key = (_vendor(manufacturer).casefold(), _text(model).casefold())
     try:
         return SUPPORTED_MODELS[key]
     except KeyError as exc:
         raise ValueError(f"unsupported BIOS fetch target: {manufacturer} {model}".strip()) from exc
+
+
+def resolve_identity(
+    dmi: Mapping[str, object], *, manufacturer: str | None = None,
+    model: str | None = None, revision: str | None = None,
+    bios_version: str | None = None,
+) -> IdentitySelection:
+    """Select a supported product without changing the detected DMI facts."""
+    detected = {key: value for key in _DMI_FIELDS
+                if (value := _dmi_text(dmi.get(key)))}
+    supplied = {
+        "manufacturer": _override("manufacturer", manufacturer),
+        "model": _override("model", model),
+        "revision": _override("revision", revision),
+        "bios_version": _override("bios-version", bios_version),
+    }
+    overrides = {key: value for key, value in supplied.items() if value is not None}
+
+    system_vendor = _vendor(detected.get("sys_vendor", ""))
+    board_vendor = _vendor(detected.get("board_vendor", ""))
+    if (system_vendor and board_vendor and system_vendor.casefold() != board_vendor.casefold()
+            and not all(supplied[key] is not None
+                        for key in ("manufacturer", "model", "bios_version"))):
+        raise ValueError(
+            "automatic motherboard identity is ambiguous because system vendor "
+            f"{system_vendor!r} differs from board vendor {board_vendor!r}; pass "
+            "--manufacturer, --model, and --bios-version"
+        )
+
+    detected_model = detected.get("board_name") or detected.get("product_name", "")
+    if (supplied["model"] is not None and detected_model
+            and supplied["model"].casefold() != detected_model.casefold()
+            and supplied["bios_version"] is None):
+        raise ValueError(
+            "--bios-version is required when --model selects a different product"
+        )
+
+    selected_manufacturer = supplied["manufacturer"] or board_vendor or system_vendor
+    selected_model = supplied["model"] or detected_model
+    selected_version = supplied["bios_version"] or detected.get("bios_version", "")
+    missing = [flag for flag, value in (
+        ("--manufacturer", selected_manufacturer),
+        ("--model", selected_model),
+        ("--bios-version", selected_version),
+    ) if not value]
+    if missing:
+        raise ValueError(f"missing BIOS identity; pass {', '.join(missing)}")
+
+    product = supported_model(selected_manufacturer, selected_model)
+    identity = Identity(
+        manufacturer=product.manufacturer,
+        model=product.model,
+        bios_version=selected_version,
+        revision=supplied["revision"] or detected.get("board_version") or None,
+    )
+    return IdentitySelection(detected, overrides, identity, product)
 
 
 def _mapping(value: object, where: str) -> Mapping[str, object]:
@@ -171,3 +276,9 @@ def select_release(releases: list[Release], requested_version: str) -> Release:
     if len(matches) != 1:
         raise ValueError(f"ASUS returned multiple BIOS releases exactly matching {version!r}")
     return matches[0]
+
+
+def resolve_release(selection: IdentitySelection, releases: list[Release]) -> Release:
+    if any(release.product_id != selection.product.product_id for release in releases):
+        raise ValueError("BIOS metadata contains a release for a different product")
+    return select_release(releases, selection.selected_identity.bios_version)
