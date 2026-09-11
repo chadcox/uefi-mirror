@@ -2,6 +2,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import stat
 import struct
 import subprocess
@@ -19,6 +20,7 @@ from uefi_mirror import cli, decode, fetch
 
 FIXTURE = Path(__file__).parent / "data" / "asus_x870e_e_bios.json"
 RUNNER = CliRunner()
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
 FETCH_DMI = {
     "sys_vendor": "ASUSTeK COMPUTER INC.",
     "product_name": "System Product Name",
@@ -549,15 +551,16 @@ def test_fetch_rejects_conflicting_output_options_before_network(monkeypatch, ar
     monkeypatch.setattr(fetch, "fetch_releases", lambda *_args: pytest.fail("network used"))
     result = RUNNER.invoke(cli.app, ["fetch", *args])
     assert result.exit_code == 2
-    assert match in result.output
+    assert match in ANSI.sub("", result.output)
 
 
 def test_fetch_help_exposes_the_public_contract():
     result = RUNNER.invoke(cli.app, ["fetch", "--help"])
     assert result.exit_code == 0, result.output
+    output = ANSI.sub("", result.stdout)
     for option in ("--output", "--snapshot", "--manufacturer", "--model", "--revision",
                    "--bios-version", "--resolve-only", "--json"):
-        assert option in result.stdout
+        assert option in output
 
 
 def test_fetch_accepts_complete_explicit_identity_without_dmi(monkeypatch):
