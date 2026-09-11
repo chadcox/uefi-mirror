@@ -3,13 +3,31 @@ inside /sys/firmware. Enforced by tests/test_safety.py."""
 
 import ctypes
 import errno
+import http.client
+import ipaddress
 import os
 import re
+import socket
+import ssl
 import stat
+import time
+import urllib.error
+import urllib.request
+from dataclasses import dataclass, field
+from urllib.parse import urljoin, urlsplit
+
+from . import __version__
 
 # efivarfs vars are kernel-capped well under this; the limit is belt-and-braces
 # against a hostile/buggy filesystem handing us an endless read.
 MAX_VARIABLE_BYTES = 1 << 20
+MAX_METADATA_BYTES = 4 << 20
+MAX_ARTIFACT_BYTES = 128 << 20
+MAX_REDIRECTS = 5
+MAX_HTTP_REQUESTS = 20
+HTTP_TIMEOUT_SECONDS = 15
+FETCH_DEADLINE_SECONDS = 180
+HTTP_READ_CHUNK = 64 << 10
 WINDOWS = os.name == "nt"
 
 # A firmware variable name is attacker-influenced on Windows (it comes back from
@@ -19,6 +37,184 @@ _UNSAFE_COMPONENT = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 _RESERVED_NAMES = {"CON", "PRN", "AUX", "NUL",
                    *(f"COM{i}" for i in range(1, 10)),
                    *(f"LPT{i}" for i in range(1, 10))}
+
+
+@dataclass
+class HttpBudget:
+    deadline: float = field(
+        default_factory=lambda: time.monotonic() + FETCH_DEADLINE_SECONDS)
+    requests: int = 0
+
+    def remaining(self) -> float:
+        remaining = self.deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("whole fetch deadline exceeded")
+        return remaining
+
+    def claim_request(self) -> float:
+        if self.requests >= MAX_HTTP_REQUESTS:
+            raise ValueError(f"fetch exceeds the {MAX_HTTP_REQUESTS} request limit")
+        timeout = min(HTTP_TIMEOUT_SECONDS, self.remaining())
+        self.requests += 1
+        return timeout
+
+
+@dataclass(frozen=True)
+class HttpResult:
+    data: bytes
+    final_url: str
+
+
+def _validate_https_url(url: str, allowed_hosts: frozenset[str]) -> None:
+    if (not isinstance(url, str) or not url
+            or any(ord(char) <= 32 or ord(char) >= 127 for char in url)):
+        raise ValueError("HTTPS URL is empty or contains unsafe characters")
+    try:
+        parsed = urlsplit(url)
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("HTTPS URL has a malformed authority") from exc
+    if parsed.scheme.casefold() != "https":
+        raise ValueError("only HTTPS URLs are allowed")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("URL credentials are refused")
+    host = parsed.hostname
+    if not host or parsed.fragment:
+        raise ValueError("HTTPS URL has a malformed authority or fragment")
+    host = host.casefold()
+    if host == "localhost" or host.endswith(".localhost"):
+        raise ValueError("localhost URLs are refused")
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    else:
+        raise ValueError("IP-literal URLs are refused")
+    if port not in (None, 443):
+        raise ValueError("only HTTPS port 443 is allowed")
+    if host not in {allowed.casefold() for allowed in allowed_hosts}:
+        raise ValueError(f"HTTPS host {host!r} is not approved")
+
+
+class _CheckedRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def __init__(self, allowed_hosts: frozenset[str], budget: HttpBudget, stage: str):
+        self.allowed_hosts = allowed_hosts
+        self.budget = budget
+        self.stage = stage
+
+    def http_error_302(self, req, fp, code, msg, headers):
+        location = headers.get("Location") or headers.get("URI")
+        if location is None:
+            fp.close()
+            raise ValueError(f"{self.stage}: redirect has no Location")
+        try:
+            if not isinstance(location, str):
+                raise ValueError("redirect Location must be text")
+            target = urljoin(req.full_url, location)
+            _validate_https_url(target, self.allowed_hosts)
+            redirects = getattr(req, "_uefi_redirects", 0) + 1
+            if redirects > MAX_REDIRECTS:
+                raise ValueError(f"exceeds the {MAX_REDIRECTS} redirect limit")
+            redirected = self.redirect_request(req, fp, code, msg, headers, target)
+            if redirected is None:
+                raise ValueError(f"{self.stage}: unsupported HTTP redirect")
+            redirected._uefi_redirects = redirects
+        except (TypeError, ValueError) as exc:
+            fp.close()
+            raise ValueError(f"{self.stage}: redirect refused: {exc}") from exc
+        except Exception:
+            fp.close()
+            raise
+        fp.close()
+        return self.parent.open(
+            redirected, timeout=min(HTTP_TIMEOUT_SECONDS, self.budget.remaining()))
+
+    http_error_301 = http_error_303 = http_error_307 = http_error_308 = http_error_302
+
+
+def _response_timeout(response, timeout: float) -> None:
+    raw = getattr(getattr(getattr(response, "fp", None), "raw", None), "_sock", None)
+    if raw is not None:
+        raw.settimeout(timeout)
+
+
+def _network_failure(stage: str, exc: BaseException) -> ValueError:
+    reason = exc.reason if isinstance(exc, urllib.error.URLError) else exc
+    if isinstance(reason, (TimeoutError, socket.timeout)):
+        detail = "timed out"
+    elif isinstance(reason, ssl.SSLCertVerificationError):
+        detail = "TLS certificate verification failed"
+    else:
+        message = "".join(char if char.isprintable() else "?" for char in str(reason))[:200]
+        detail = f"network request failed: {message}"
+    return ValueError(f"{stage}: {detail}")
+
+
+def read_https(
+    url: str, limit: int, allowed_hosts: frozenset[str], *, stage: str,
+    budget: HttpBudget,
+) -> HttpResult:
+    """Read one approved HTTPS resource with shared request/deadline limits."""
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+        raise ValueError("HTTPS byte limit must be a positive integer")
+    try:
+        _validate_https_url(url, allowed_hosts)
+    except ValueError as exc:
+        raise ValueError(f"{stage}: {exc}") from exc
+    timeout = budget.claim_request()
+    redirect = _CheckedRedirectHandler(allowed_hosts, budget, stage)
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), redirect)
+    request = urllib.request.Request(
+        url, headers={"Accept-Encoding": "identity",
+                      "User-Agent": f"uefi-mirror/{__version__}"})
+    try:
+        response = opener.open(request, timeout=timeout)
+    except urllib.error.HTTPError as exc:
+        exc.close()
+        raise ValueError(f"{stage}: HTTP {exc.code}") from exc
+    except (urllib.error.URLError, OSError) as exc:
+        raise _network_failure(stage, exc) from exc
+
+    try:
+        with response:
+            try:
+                _validate_https_url(response.geturl(), allowed_hosts)
+            except ValueError as exc:
+                raise ValueError(f"{stage}: final URL refused: {exc}") from exc
+            encoding = response.headers.get("Content-Encoding", "identity")
+            if not isinstance(encoding, str):
+                raise ValueError(f"{stage}: invalid Content-Encoding")
+            encoding = encoding.strip().casefold()
+            if encoding not in ("", "identity"):
+                raise ValueError(f"{stage}: unsupported Content-Encoding {encoding!r}")
+            raw_length = response.headers.get("Content-Length")
+            declared = None
+            if raw_length is not None:
+                if not isinstance(raw_length, str):
+                    raise ValueError(f"{stage}: invalid Content-Length")
+                raw_length = raw_length.strip()
+                if not re.fullmatch(r"[0-9]+", raw_length):
+                    raise ValueError(f"{stage}: invalid Content-Length")
+                declared = int(raw_length)
+                if declared > limit:
+                    raise ValueError(f"{stage}: exceeds the {limit} byte limit")
+
+            data = bytearray()
+            while len(data) <= limit:
+                remaining = budget.remaining()
+                _response_timeout(response, min(HTTP_TIMEOUT_SECONDS, remaining))
+                chunk = response.read(min(HTTP_READ_CHUNK, limit + 1 - len(data)))
+                if not chunk:
+                    break
+                data.extend(chunk)
+            if len(data) > limit:
+                raise ValueError(f"{stage}: exceeds the {limit} byte limit")
+            if declared is not None and len(data) != declared:
+                raise ValueError(
+                    f"{stage}: response ended at {len(data)} bytes, expected {declared}")
+            return HttpResult(bytes(data), response.geturl())
+    except (http.client.HTTPException, OSError) as exc:
+        raise _network_failure(stage, exc) from exc
 
 
 def safe_component(name: str) -> bool:

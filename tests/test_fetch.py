@@ -142,6 +142,28 @@ def test_cross_product_release_list_is_rejected():
         fetch.resolve_release(selection, [other])
 
 
+def test_vendor_reads_use_reviewed_hosts_limits_and_one_shared_budget(monkeypatch):
+    product = fetch.supported_model("ASUS", "ROG STRIX X870E-E GAMING WIFI")
+    budget = fetch.safety.HttpBudget()
+    calls = []
+
+    def read_https(url, limit, hosts, *, stage, budget):
+        calls.append((url, limit, hosts, stage, budget))
+        data = _metadata() if stage == "ASUS metadata" else b"artifact"
+        return fetch.safety.HttpResult(data, url)
+
+    monkeypatch.setattr(fetch.safety, "read_https", read_https)
+    releases = fetch.fetch_releases(product, budget)
+    artifact = fetch.download_artifact(releases[0], budget)
+
+    assert len(releases) == 4 and artifact.data == b"artifact"
+    assert calls[0][1:4] == (
+        fetch.safety.MAX_METADATA_BYTES, fetch.ASUS_METADATA_HOSTS, "ASUS metadata")
+    assert calls[1][1:4] == (
+        fetch.safety.MAX_ARTIFACT_BYTES, fetch.ASUS_ARTIFACT_HOSTS, "ASUS BIOS artifact")
+    assert calls[0][4] is calls[1][4] is budget
+
+
 def test_missing_and_ambiguous_releases_fail_instead_of_selecting_latest():
     _, releases = _records()
     with pytest.raises(ValueError, match="no BIOS release exactly matching"):

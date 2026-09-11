@@ -6,8 +6,12 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from urllib.parse import urlencode
 
+from . import safety
+
 ASUS_METADATA_ENDPOINT = "https://www.asus.com/support/webapi/ProductV2/GetPDBIOS"
 ASUS_ARTIFACT_ORIGIN = "https://dlcdnets.asus.com"
+ASUS_METADATA_HOSTS = frozenset({"www.asus.com"})
+ASUS_ARTIFACT_HOSTS = frozenset({"dlcdnets.asus.com"})
 
 _VENDOR_ALIASES = {
     "asus": "ASUS",
@@ -264,6 +268,19 @@ def parse_asus_metadata(data: bytes, product: Product) -> list[Release]:
         if release not in releases:
             releases.append(release)
     return releases
+
+
+def fetch_releases(product: Product, budget: safety.HttpBudget) -> list[Release]:
+    response = safety.read_https(
+        product.metadata_url, safety.MAX_METADATA_BYTES, ASUS_METADATA_HOSTS,
+        stage="ASUS metadata", budget=budget)
+    return parse_asus_metadata(response.data, product)
+
+
+def download_artifact(release: Release, budget: safety.HttpBudget) -> safety.HttpResult:
+    return safety.read_https(
+        release.download_url, safety.MAX_ARTIFACT_BYTES, ASUS_ARTIFACT_HOSTS,
+        stage="ASUS BIOS artifact", budget=budget)
 
 
 def select_release(releases: list[Release], requested_version: str) -> Release:

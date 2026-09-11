@@ -11,6 +11,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import types
 
 import fixtures
 
@@ -593,6 +594,247 @@ def test_cli_refuses_symlinked_output_dir():
         # The symlink target must not have been written into.
         assert not os.path.exists(os.path.join(target, "raw-variables"))
         assert not os.path.exists(os.path.join(target, "manifest.json"))
+
+# ---------------------------------------------------------------- network
+
+_HTTPS_HOSTS = frozenset({"www.asus.com"})
+
+
+class _HttpResponse:
+    def __init__(self, data=b"ok", *, headers=None, url="https://www.asus.com/final",
+                 on_read=None):
+        self.data = data
+        self.headers = headers or {}
+        self.url = url
+        self.on_read = on_read
+        self.position = 0
+        self.reads = 0
+        self.closed = False
+        self.socket_timeouts = []
+        sock = types.SimpleNamespace(settimeout=self.socket_timeouts.append)
+        self.fp = types.SimpleNamespace(raw=types.SimpleNamespace(_sock=sock))
+
+    def geturl(self):
+        return self.url
+
+    def read(self, size=-1):
+        self.reads += 1
+        if self.on_read:
+            self.on_read()
+        if size < 0:
+            raise AssertionError("unbounded HTTP read")
+        chunk = self.data[self.position:self.position + size]
+        self.position += len(chunk)
+        return chunk
+
+    def close(self):
+        self.closed = True
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        self.close()
+
+
+class _HttpOpener:
+    def __init__(self, response):
+        self.response = response
+        self.requests = []
+
+    def open(self, request, timeout):
+        self.requests.append((request, timeout))
+        if isinstance(self.response, BaseException):
+            raise self.response
+        return self.response
+
+
+def _read_https(response, *, limit=10, budget=None):
+    opener = _HttpOpener(response)
+    handlers = []
+    real_build_opener = safety.urllib.request.build_opener
+
+    def build_opener(*args):
+        handlers.extend(args)
+        return opener
+
+    safety.urllib.request.build_opener = build_opener
+    try:
+        result = safety.read_https(
+            "https://www.asus.com/start", limit, _HTTPS_HOSTS, stage="metadata",
+            budget=budget or safety.HttpBudget())
+        return result, opener, handlers
+    finally:
+        safety.urllib.request.build_opener = real_build_opener
+
+
+def test_https_url_policy_refuses_unapproved_destinations_before_opening():
+    bad = (
+        "http://www.asus.com/x",
+        "https://user@www.asus.com/x",
+        "https://www.asus.com:444/x",
+        "https://www.asus.com:bad/x",
+        "https://www.asus.com.evil.example/x",
+        "https://www.asus.com./x",
+        "https://localhost/x",
+        "https://127.0.0.1/x",
+        "https://[::1]/x",
+        "https://www.asus.com/x#fragment",
+        "https://www.asus.com/a b",
+        "https://www.asus.com/café",
+    )
+    real_build_opener = safety.urllib.request.build_opener
+    safety.urllib.request.build_opener = lambda *_args: (_ for _ in ()).throw(
+        AssertionError("refused destination was opened"))
+    try:
+        for url in bad:
+            try:
+                safety.read_https(url, 10, _HTTPS_HOSTS, stage="metadata",
+                                  budget=safety.HttpBudget())
+                raise AssertionError(f"unsafe URL accepted: {url}")
+            except ValueError:
+                pass
+    finally:
+        safety.urllib.request.build_opener = real_build_opener
+
+
+def test_https_reader_disables_proxies_sets_headers_and_closes_response():
+    response = _HttpResponse(b"data", headers={"Content-Length": "4"})
+    result, opener, handlers = _read_https(response)
+
+    request, timeout = opener.requests[0]
+    proxies = [handler for handler in handlers
+               if isinstance(handler, safety.urllib.request.ProxyHandler)]
+    assert result == safety.HttpResult(b"data", "https://www.asus.com/final")
+    assert proxies and proxies[0].proxies == {}
+    assert request.get_header("Accept-encoding") == "identity"
+    assert request.get_header("User-agent") == f"uefi-mirror/{safety.__version__}"
+    assert timeout == safety.HTTP_TIMEOUT_SECONDS
+    assert response.socket_timeouts
+    assert max(response.socket_timeouts) <= safety.HTTP_TIMEOUT_SECONDS
+    assert response.closed
+
+
+def test_https_reader_enforces_declared_actual_and_encoding_limits():
+    cases = (
+        (_HttpResponse(b"", headers={"Content-Length": "11"}), 10, "byte limit"),
+        (_HttpResponse(b"1234"), 3, "byte limit"),
+        (_HttpResponse(b"abc", headers={"Content-Length": "4"}), 10, "expected 4"),
+        (_HttpResponse(b"abc", headers={"Content-Length": "nope"}), 10,
+         "invalid Content-Length"),
+        (_HttpResponse(b"abc", headers={"Content-Encoding": "gzip"}), 10,
+         "unsupported Content-Encoding"),
+        (_HttpResponse(b"abc", headers={"Content-Length": 3}), 10,
+         "invalid Content-Length"),
+        (_HttpResponse(b"abc", headers={"Content-Encoding": 7}), 10,
+         "invalid Content-Encoding"),
+    )
+    for response, limit, message in cases:
+        try:
+            _read_https(response, limit=limit)
+            raise AssertionError(f"unsafe response accepted: {message}")
+        except ValueError as exc:
+            assert message in str(exc), exc
+        assert response.closed
+    assert cases[0][0].reads == 0
+
+
+def test_https_redirects_are_validated_bounded_and_not_read():
+    budget = safety.HttpBudget(requests=1)
+    handler = safety._CheckedRedirectHandler(_HTTPS_HOSTS, budget, "metadata")
+    destination = _HttpResponse()
+    parent = _HttpOpener(destination)
+    handler.add_parent(parent)
+
+    request = safety.urllib.request.Request("https://www.asus.com/start")
+    redirect = _HttpResponse()
+    result = handler.http_error_302(
+        request, redirect, 302, "Found", {"Location": "/next"})
+    assert result is destination
+    assert redirect.closed and redirect.reads == 0
+    assert parent.requests[0][0].full_url == "https://www.asus.com/next"
+    assert budget.requests == 1  # Redirect hops do not consume the request budget.
+
+    for location in ("http://www.asus.com/down", "https://evil.example/x", 7, None):
+        refused = _HttpResponse()
+        try:
+            handler.http_error_302(
+                request, refused, 302, "Found",
+                {"Location": location} if location is not None else {})
+            raise AssertionError(f"unsafe redirect accepted: {location}")
+        except ValueError:
+            pass
+        assert refused.closed
+    assert len(parent.requests) == 1
+
+    request._uefi_redirects = safety.MAX_REDIRECTS
+    refused = _HttpResponse()
+    try:
+        handler.http_error_302(
+            request, refused, 302, "Found", {"Location": "/loop"})
+        raise AssertionError("redirect limit was ignored")
+    except ValueError as exc:
+        assert "redirect limit" in str(exc)
+    assert refused.closed and len(parent.requests) == 1
+
+
+def test_https_reader_refuses_an_unapproved_final_url_and_closes_response():
+    response = _HttpResponse(url="https://evil.example/final")
+    try:
+        _read_https(response)
+        raise AssertionError("unapproved final URL accepted")
+    except ValueError as exc:
+        assert "final URL refused" in str(exc)
+    assert response.closed and response.reads == 0
+
+
+def test_https_reader_enforces_request_and_whole_fetch_deadlines():
+    exhausted = safety.HttpBudget(requests=safety.MAX_HTTP_REQUESTS)
+    try:
+        _read_https(_HttpResponse(), budget=exhausted)
+        raise AssertionError("request budget was ignored")
+    except ValueError as exc:
+        assert "request limit" in str(exc)
+
+    now = [100.0]
+    real_monotonic = safety.time.monotonic
+    safety.time.monotonic = lambda: now[0]
+    response = _HttpResponse(b"ab", on_read=lambda: now.__setitem__(0, 281.0))
+    try:
+        _read_https(response, budget=safety.HttpBudget(deadline=280.0))
+        raise AssertionError("whole fetch deadline was ignored")
+    except ValueError as exc:
+        assert "timed out" in str(exc)
+    finally:
+        safety.time.monotonic = real_monotonic
+    assert response.closed
+
+
+def test_https_reader_reports_http_and_socket_failures_without_bodies():
+    error_body = _HttpResponse(b"do not read me")
+    http_error = safety.urllib.error.HTTPError(
+        "https://www.asus.com/start", 429, "rate limited", {}, error_body)
+    try:
+        _read_https(http_error)
+        raise AssertionError("HTTP error accepted")
+    except ValueError as exc:
+        assert "HTTP 429" in str(exc)
+    assert error_body.closed and error_body.reads == 0
+
+    timeout = safety.urllib.error.URLError(TimeoutError("slow"))
+    try:
+        _read_https(timeout)
+        raise AssertionError("timeout accepted")
+    except ValueError as exc:
+        assert "timed out" in str(exc)
+
+    tls = safety.urllib.error.URLError(
+        safety.ssl.SSLCertVerificationError("untrusted certificate"))
+    try:
+        _read_https(tls)
+        raise AssertionError("TLS verification failure accepted")
+    except ValueError as exc:
+        assert "TLS certificate verification failed" in str(exc)
 
 # ---------------------------------------------------------------- parsing
 
