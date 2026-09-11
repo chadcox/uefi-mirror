@@ -553,6 +553,54 @@ def read_bounded(path: str, limit: int = MAX_VARIABLE_BYTES) -> bytes:
         os.close(fd)
 
 
+def require_empty_output_dir(path: str) -> None:
+    """Allow a missing or empty directory, refusing unsafe existing paths."""
+    if WINDOWS:
+        absolute = os.path.abspath(path)
+        drive, tail = os.path.splitdrive(absolute)
+        current = drive + os.sep
+        for part in tail.split(os.sep):
+            if not part:
+                continue
+            current = os.path.join(current, part)
+            if not os.path.lexists(current):
+                return
+            if os.path.islink(current) or os.path.isjunction(current):
+                raise PermissionError(f"{path}: output path contains a reparse point")
+            if not os.path.isdir(current):
+                raise PermissionError(f"{path}: output path contains a non-directory")
+        if os.listdir(absolute):
+            raise FileExistsError(f"{path}: output directory is not empty")
+        return
+
+    _refuse_protected_root(path)
+    parts = os.path.abspath(path).split(os.sep)
+    dir_fd = os.open(os.sep, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    try:
+        for part in parts:
+            if not part:
+                continue
+            try:
+                next_fd = os.open(
+                    part, os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY | os.O_CLOEXEC,
+                    dir_fd=dir_fd)
+            except FileNotFoundError:
+                return
+            except OSError as exc:
+                if exc.errno in (errno.ELOOP, errno.ENOTDIR):
+                    raise PermissionError(
+                        f"{path}: output path contains a symlink or non-directory") from exc
+                raise
+            os.close(dir_fd)
+            dir_fd = next_fd
+        if os.fstat(dir_fd).st_uid != os.getuid():
+            raise PermissionError(f"{path}: output directory owned by another user")
+        if os.listdir(dir_fd):
+            raise FileExistsError(f"{path}: output directory is not empty")
+    finally:
+        os.close(dir_fd)
+
+
 def _refuse_protected_root(path: str) -> None:
     """Refuse any output destination that resolves under the kernel firmware
     tree (/sys/firmware), before any mutation such as mkdir, chmod, truncate or

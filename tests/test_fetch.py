@@ -1,8 +1,10 @@
 import hashlib
 import io
 import json
+import os
 import stat
 import struct
+import subprocess
 import warnings
 import zipfile
 from dataclasses import replace
@@ -10,11 +12,21 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
+from typer.testing import CliRunner
 
 from tests import fixtures
-from uefi_mirror import fetch
+from uefi_mirror import cli, decode, fetch
 
 FIXTURE = Path(__file__).parent / "data" / "asus_x870e_e_bios.json"
+RUNNER = CliRunner()
+FETCH_DMI = {
+    "sys_vendor": "ASUSTeK COMPUTER INC.",
+    "product_name": "System Product Name",
+    "board_vendor": "ASUSTeK COMPUTER INC.",
+    "board_name": "ROG STRIX X870E-E GAMING WIFI",
+    "board_version": "Rev 1.xx",
+    "bios_version": "2402",
+}
 
 
 def _metadata() -> bytes:
@@ -52,6 +64,49 @@ def _patch_zip_field(data: bytes, signature: bytes, offset: int, value: int) -> 
     assert position >= 0
     struct.pack_into("<I" if value > 0xffff else "<H", changed, position + offset, value)
     return bytes(changed)
+
+
+def _fetch_inputs():
+    image = fixtures.build_capsule()
+    artifact = _zip(("BIOS.CAP", image), ("BIOSRenamer.exe", b"not executed"))
+    metadata = json.loads(_metadata())
+    records = metadata["Result"]["Obj"][0]["Files"]
+    next(record for record in records if record["Version"] == "2402")["sha256"] = (
+        hashlib.sha256(artifact).hexdigest())
+    return image, artifact, json.dumps(metadata).encode()
+
+
+def _fake_fetch_network(monkeypatch, artifact, metadata):
+    calls = []
+
+    def read_https(url, limit, hosts, *, stage, budget):
+        calls.append((url, limit, hosts, stage, budget))
+        data = metadata if stage == "ASUS metadata" else artifact
+        return fetch.safety.HttpResult(data, url)
+
+    monkeypatch.setattr(fetch.safety, "read_https", read_https)
+    return calls
+
+
+def _identity_snapshot(root: Path, dmi: dict, payload: bytes | None = None) -> Path:
+    raw = root / "raw-variables"
+    raw.mkdir(parents=True)
+    variables = []
+    if payload is not None:
+        guid = str(fixtures.VARSTORE_GUID)
+        filename = f"Setup-{guid}"
+        (raw / filename).write_bytes(payload)
+        variables.append({
+            "name": "Setup", "guid": guid, "filename": filename,
+            "attributes": 7, "payload_size": len(payload),
+            "payload_sha256": hashlib.sha256(payload).hexdigest(), "error": None,
+        })
+    (root / "manifest.json").write_text(json.dumps({
+        "format_version": decode.SNAPSHOT_FORMAT_VERSION,
+        "platform": {"dmi": dmi},
+        "variables": variables,
+    }))
+    return root
 
 
 def test_supported_model_uses_the_reviewed_asus_endpoint():
@@ -368,6 +423,236 @@ def test_artifact_rejects_unsupported_or_unusable_content(name, data, match):
     with pytest.raises(ValueError, match=match):
         fetch.validate_artifact(
             _release(data, checksum=False), _artifact(data, name))
+
+
+def test_fetch_cli_downloads_private_files_and_emits_clean_json(tmp_path, monkeypatch):
+    image, artifact, metadata = _fetch_inputs()
+    calls = _fake_fetch_network(monkeypatch, artifact, metadata)
+    monkeypatch.setattr(cli.platform, "dmi", lambda: FETCH_DMI)
+    monkeypatch.setattr(cli, "_live_variables", lambda *_args: pytest.fail(
+        "fetch collected firmware variables"))
+    output = tmp_path / "firmware"
+
+    result = RUNNER.invoke(cli.app, ["fetch", "--output", str(output), "--json"])
+
+    assert result.exit_code == 0, result.output
+    wrapper = json.loads(result.stdout)
+    saved = json.loads((output / "fetch.json").read_text())
+    assert sorted(path.name for path in output.iterdir()) == ["BIOS.CAP", "fetch.json"]
+    assert (output / "BIOS.CAP").read_bytes() == image
+    assert wrapper == {
+        "format_version": 1,
+        "operation": "fetch",
+        "image_path": str(output / "BIOS.CAP"),
+        "manifest_path": str(output / "fetch.json"),
+        "provenance": saved,
+    }
+    assert saved["identity_source"] == "local"
+    assert set(saved) == {
+        "format_version", "tool_version", "fetched_at", "identity_source",
+        "detected_identity", "overrides", "selected_identity", "release",
+        "support_url", "download_url", "final_download_url", "artifact",
+        "publisher_checksum", "image", "validation", "warnings",
+    }
+    assert saved["detected_identity"]["board_name"] == FETCH_DMI["board_name"]
+    assert saved["publisher_checksum"]["status"] == "verified"
+    assert saved["artifact"] == {
+        "size": len(artifact), "sha256": hashlib.sha256(artifact).hexdigest()}
+    assert saved["image"]["file_sha256"] == hashlib.sha256(image).hexdigest()
+    assert saved["validation"] == {
+        "settings_count": 1, "installed_firmware_identity": "unverified"}
+    assert len(calls) == 2 and calls[0][4] is calls[1][4]
+    if os.name != "nt":
+        assert output.stat().st_mode & 0o777 == 0o700
+        assert (output / "BIOS.CAP").stat().st_mode & 0o777 == 0o600
+        assert (output / "fetch.json").stat().st_mode & 0o777 == 0o600
+
+
+def test_fetched_image_flows_through_existing_schema_and_export(tmp_path, monkeypatch):
+    _image, artifact, metadata = _fetch_inputs()
+    calls = _fake_fetch_network(monkeypatch, artifact, metadata)
+    monkeypatch.setattr(cli.platform, "dmi", lambda: FETCH_DMI)
+    output = tmp_path / "firmware"
+    fetched = RUNNER.invoke(cli.app, ["fetch", "-o", str(output)])
+    assert fetched.exit_code == 0, fetched.output
+
+    schema_path = tmp_path / "schema.json"
+    schema_result = RUNNER.invoke(
+        cli.app, ["schema", str(output / "BIOS.CAP"), "-o", str(schema_path)])
+    assert schema_result.exit_code == 0, schema_result.output
+
+    snapshot = _identity_snapshot(
+        tmp_path / "snapshot", FETCH_DMI, bytes(0x100))
+    export_path = tmp_path / "export.json"
+    export_result = RUNNER.invoke(cli.app, [
+        "export", str(output / "BIOS.CAP"), "--snapshot", str(snapshot),
+        "-o", str(export_path),
+    ])
+    assert export_result.exit_code == 0, export_result.output
+    assert json.loads(export_path.read_text())["image"]["compatibility"]["status"] == (
+        "unverified")
+    assert len(calls) == 2  # Existing schema/export commands remain offline.
+
+
+def test_resolve_only_json_does_not_download_or_write(tmp_path, monkeypatch):
+    _image, artifact, metadata = _fetch_inputs()
+    calls = _fake_fetch_network(monkeypatch, artifact, metadata)
+    monkeypatch.setattr(cli.platform, "dmi", lambda: FETCH_DMI)
+
+    result = RUNNER.invoke(cli.app, ["fetch", "--resolve-only", "--json"])
+
+    assert result.exit_code == 0, result.output
+    document = json.loads(result.stdout)
+    assert document["operation"] == "resolve"
+    assert document["release"]["version"] == "2402"
+    assert document["publisher_checksum"]["status"] == "advertised"
+    assert not {"artifact", "image", "image_path", "manifest_path", "validation"} & document.keys()
+    assert [call[3] for call in calls] == ["ASUS metadata"]
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_fetch_uses_validated_snapshot_identity_without_reading_local_dmi(
+        tmp_path, monkeypatch):
+    _image, artifact, metadata = _fetch_inputs()
+    calls = _fake_fetch_network(monkeypatch, artifact, metadata)
+    snapshot = _identity_snapshot(tmp_path / "snapshot", FETCH_DMI)
+    monkeypatch.setattr(cli.platform, "dmi", lambda: pytest.fail("local DMI was read"))
+
+    result = RUNNER.invoke(cli.app, [
+        "fetch", "--snapshot", str(snapshot), "--resolve-only", "--json"])
+
+    assert result.exit_code == 0, result.output
+    document = json.loads(result.stdout)
+    assert document["identity_source"] == "snapshot"
+    assert document["detected_identity"]["bios_version"] == "2402"
+    assert len(calls) == 1
+
+
+def test_snapshot_without_dmi_never_borrows_local_identity(tmp_path, monkeypatch):
+    snapshot = _identity_snapshot(tmp_path / "snapshot", {})
+    monkeypatch.setattr(cli.platform, "dmi", lambda: pytest.fail("local DMI was read"))
+    monkeypatch.setattr(fetch, "fetch_releases", lambda *_args: pytest.fail(
+        "network was used without an identity"))
+
+    result = RUNNER.invoke(cli.app, [
+        "fetch", "--snapshot", str(snapshot), "--resolve-only"])
+
+    assert result.exit_code == 1
+    assert "--manufacturer, --model, --bios-version" in result.output
+
+
+@pytest.mark.parametrize("args,match", [
+    ([], "--output is required"),
+    (["--resolve-only", "--output", "unused"], "cannot be used"),
+])
+def test_fetch_rejects_conflicting_output_options_before_network(monkeypatch, args, match):
+    monkeypatch.setattr(fetch, "fetch_releases", lambda *_args: pytest.fail("network used"))
+    result = RUNNER.invoke(cli.app, ["fetch", *args])
+    assert result.exit_code == 2
+    assert match in result.output
+
+
+def test_fetch_help_exposes_the_public_contract():
+    result = RUNNER.invoke(cli.app, ["fetch", "--help"])
+    assert result.exit_code == 0, result.output
+    for option in ("--output", "--snapshot", "--manufacturer", "--model", "--revision",
+                   "--bios-version", "--resolve-only", "--json"):
+        assert option in result.stdout
+
+
+def test_fetch_accepts_complete_explicit_identity_without_dmi(monkeypatch):
+    _image, artifact, metadata = _fetch_inputs()
+    calls = _fake_fetch_network(monkeypatch, artifact, metadata)
+    monkeypatch.setattr(cli.platform, "dmi", lambda: {})
+    result = RUNNER.invoke(cli.app, [
+        "fetch", "--resolve-only", "--json", "--manufacturer", "ASUS",
+        "--model", FETCH_DMI["board_name"], "--bios-version", "2402",
+    ])
+
+    assert result.exit_code == 0, result.output
+    document = json.loads(result.stdout)
+    assert document["detected_identity"] == {}
+    assert document["overrides"]["bios_version"] == "2402"
+    assert len(calls) == 1
+
+
+def test_fetch_refuses_nonempty_output_before_network(tmp_path, monkeypatch):
+    output = tmp_path / "firmware"
+    output.mkdir()
+    sentinel = output / "keep"
+    sentinel.write_text("unchanged")
+    monkeypatch.setattr(fetch, "fetch_releases", lambda *_args: pytest.fail("network used"))
+
+    result = RUNNER.invoke(cli.app, ["fetch", "--output", str(output)])
+
+    assert result.exit_code == 1
+    assert "not empty" in result.output
+    assert sentinel.read_text() == "unchanged"
+
+
+def test_fetch_refuses_symlinked_or_reparse_output_before_network(tmp_path, monkeypatch):
+    target = tmp_path / "target"
+    target.mkdir()
+    link = tmp_path / "firmware"
+    if os.name == "nt":
+        subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(target)],
+                       check=True, capture_output=True)
+    else:
+        os.symlink(target, link)
+    monkeypatch.setattr(fetch, "fetch_releases", lambda *_args: pytest.fail("network used"))
+
+    result = RUNNER.invoke(cli.app, ["fetch", "--output", str(link)])
+
+    assert result.exit_code == 1
+    assert "output" in result.output
+    assert list(target.iterdir()) == []
+
+
+def test_fetch_reports_partial_output_when_manifest_write_fails(tmp_path, monkeypatch):
+    image, artifact, metadata = _fetch_inputs()
+    _fake_fetch_network(monkeypatch, artifact, metadata)
+    monkeypatch.setattr(cli.platform, "dmi", lambda: FETCH_DMI)
+    real_write = cli.write_private
+
+    def fail_manifest(path, data):
+        if path.endswith("fetch.json"):
+            raise OSError("disk full")
+        real_write(path, data)
+
+    monkeypatch.setattr(cli, "write_private", fail_manifest)
+    output = tmp_path / "firmware"
+    result = RUNNER.invoke(
+        cli.app, ["fetch", "--output", str(output), "--json"])
+
+    assert result.exit_code == 1
+    assert "may be partial" in result.output
+    assert (output / "BIOS.CAP").read_bytes() == image
+    assert not (output / "fetch.json").exists()
+    assert result.stdout == ""
+
+
+def test_provenance_warns_when_override_differs_from_detected_version():
+    image = fixtures.build_capsule()
+    artifact = _artifact(image, "BIOS.CAP")
+    selection = fetch.resolve_identity(
+        FETCH_DMI, bios_version="2401")
+    release = replace(_release(image), version="2401")
+    validated = fetch.validate_artifact(release, artifact)
+
+    document = fetch.provenance_document(
+        selection, release, artifact, validated, "local", "1.0.0",
+        "2026-09-10T00:00:00Z")
+
+    assert any("differs from detected version" in warning
+               for warning in document["warnings"])
+
+    missing_release = replace(release, publisher_sha256=None)
+    missing_image = fetch.validate_artifact(missing_release, artifact)
+    missing = fetch.provenance_document(
+        selection, missing_release, artifact, missing_image, "local", "1.0.0",
+        "2026-09-10T00:00:00Z")
+    assert missing["publisher_checksum"] == {"status": "unavailable"}
+    assert "Publisher SHA-256 was unavailable." in missing["warnings"]
 
 
 def test_missing_and_ambiguous_releases_fail_instead_of_selecting_latest():

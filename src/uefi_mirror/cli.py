@@ -10,9 +10,10 @@ from rich.table import Table
 
 from . import __version__, decode, platform, report
 from . import diff as diff_mod
+from . import fetch as fetch_mod
 from .collectors import efivarfs, windows
 from .firmware import cap, firmware_volume
-from .safety import private_dir, safe_component, write_private
+from .safety import private_dir, require_empty_output_dir, safe_component, write_private
 from .schema import builder
 from .schema.model import Schema, schema_hash
 
@@ -94,6 +95,14 @@ def _output_dir(path: str) -> str:
     """Create a user-named output directory, surfacing a refusal cleanly."""
     try:
         return private_dir(path)
+    except OSError as exc:
+        typer.echo(f"refused output directory: {exc}", err=True)
+        raise typer.Exit(1) from exc
+
+
+def _fetch_output_ready(path: str) -> None:
+    try:
+        require_empty_output_dir(path)
     except OSError as exc:
         typer.echo(f"refused output directory: {exc}", err=True)
         raise typer.Exit(1) from exc
@@ -188,6 +197,88 @@ def probe() -> None:
         table.add_row("Privileges", "root" if info["euid"] == 0 else f"uid {info['euid']}"
                                     " (some variables may be unreadable)")
     console.print(table)
+
+
+@app.command()
+def fetch(
+    output: str = typer.Option(None, "--output", "-o", help="Directory for the firmware."),
+    snapshot_dir: str = typer.Option(
+        None, "--snapshot", help="Use identity from a validated snapshot."),
+    manufacturer: str = typer.Option(None, "--manufacturer", help="Manufacturer override."),
+    model: str = typer.Option(None, "--model", help="Exact supported model override."),
+    revision: str = typer.Option(None, "--revision", help="Board revision override."),
+    bios_version: str = typer.Option(
+        None, "--bios-version", help="Exact BIOS version override."),
+    resolve_only: bool = typer.Option(
+        False, "--resolve-only", help="Resolve metadata without downloading or writing."),
+    json_output: bool = typer.Option(
+        False, "--json", help="Emit one machine-readable JSON object."),
+) -> None:
+    """Retrieve one supported official BIOS image without flashing it."""
+    if resolve_only and output is not None:
+        raise typer.BadParameter("--output cannot be used with --resolve-only")
+    if not resolve_only and output is None:
+        raise typer.BadParameter("--output is required unless --resolve-only is used")
+    if output is not None:
+        _fetch_output_ready(output)
+
+    try:
+        if snapshot_dir:
+            store = decode.from_snapshot(snapshot_dir)
+            detected = _dmi_for(store)
+            identity_source = "snapshot"
+        else:
+            detected = platform.dmi()
+            identity_source = "local"
+        selection = fetch_mod.resolve_identity(
+            detected, manufacturer=manufacturer, model=model, revision=revision,
+            bios_version=bios_version)
+        budget = fetch_mod.safety.HttpBudget()
+        releases = fetch_mod.fetch_releases(selection.product, budget)
+        release = fetch_mod.resolve_release(selection, releases)
+        if resolve_only:
+            result = fetch_mod.resolution_document(
+                selection, release, identity_source, __version__)
+            if json_output:
+                typer.echo(json.dumps(result, sort_keys=True))
+            else:
+                typer.echo(
+                    f"Resolved {release.version} for {selection.selected_identity.model}")
+                typer.echo(release.download_url)
+            return
+        artifact = fetch_mod.download_artifact(release, budget)
+        image = fetch_mod.validate_artifact(release, artifact)
+    except (OSError, RuntimeError, ValueError) as exc:
+        typer.echo(f"fetch failed: {exc}", err=True)
+        raise typer.Exit(1) from exc
+
+    provenance = fetch_mod.provenance_document(
+        selection, release, artifact, image, identity_source, __version__, _now())
+    _fetch_output_ready(output)
+    _output_dir(output)
+    image_path = os.path.join(output, image.image_name)
+    manifest_path = os.path.join(output, "fetch.json")
+    try:
+        _write_output(image_path, image.image_data)
+        _write_output(
+            manifest_path,
+            json.dumps(provenance, indent=2, sort_keys=True).encode() + b"\n",
+        )
+    except typer.Exit:
+        typer.echo(f"fetch output may be partial; inspect {output!r}", err=True)
+        raise
+
+    if json_output:
+        typer.echo(json.dumps({
+            "format_version": fetch_mod.FETCH_FORMAT_VERSION,
+            "operation": "fetch",
+            "image_path": image_path,
+            "manifest_path": manifest_path,
+            "provenance": provenance,
+        }, sort_keys=True))
+    else:
+        typer.echo(f"Fetched {release.version} to {image_path}")
+        typer.echo(f"Provenance written to {manifest_path}")
 
 
 @app.command()

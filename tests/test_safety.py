@@ -239,6 +239,37 @@ def test_output_permissions_are_private():
             assert oct(os.stat(f).st_mode & 0o777) == "0o600"
 
 
+def test_fetch_output_preflight_allows_only_missing_or_empty_safe_directories():
+    with tempfile.TemporaryDirectory() as d:
+        missing = os.path.join(d, "missing", "firmware")
+        safety.require_empty_output_dir(missing)
+        assert not os.path.exists(missing)
+
+        empty = os.path.join(d, "empty")
+        os.makedirs(empty)
+        safety.require_empty_output_dir(empty)
+        open(os.path.join(empty, "existing"), "wb").write(b"keep")
+        try:
+            safety.require_empty_output_dir(empty)
+            raise AssertionError("nonempty output directory was accepted")
+        except FileExistsError:
+            pass
+
+        elsewhere = os.path.join(d, "elsewhere")
+        os.makedirs(elsewhere)
+        link = os.path.join(d, "link")
+        if os.name == "nt":
+            subprocess.run(["cmd", "/c", "mklink", "/J", link, elsewhere],
+                           check=True, capture_output=True)
+        else:
+            os.symlink(elsewhere, link)
+        try:
+            safety.require_empty_output_dir(os.path.join(link, "firmware"))
+            raise AssertionError("symlinked output ancestor was accepted")
+        except PermissionError:
+            pass
+
+
 def test_private_write_retries_partial_os_writes():
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, "partial")

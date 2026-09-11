@@ -23,6 +23,7 @@ ASUS_METADATA_HOSTS = frozenset({"www.asus.com"})
 ASUS_ARTIFACT_HOSTS = frozenset({"dlcdnets.asus.com"})
 MAX_ZIP_ENTRIES = 128
 MAX_ZIP_UNCOMPRESSED = 256 << 20
+FETCH_FORMAT_VERSION = 1
 _IMAGE_SUFFIXES = frozenset({".cap", ".rom", ".bin", ".fd"})
 _ZIP_COMPRESSION = frozenset({zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED})
 
@@ -109,6 +110,7 @@ class ValidatedImage:
     publisher_checksum_status: str
     capsule: cap.Capsule
     settings_count: int
+    parser_warnings: tuple[str, ...]
 
 
 _X870E_E = Product(
@@ -456,7 +458,103 @@ def validate_artifact(release: Release, artifact: safety.HttpResult) -> Validate
         publisher_checksum_status=checksum_status,
         capsule=capsule,
         settings_count=len(schema.settings),
+        parser_warnings=tuple(schema.warnings),
     )
+
+
+def _selected_dict(identity: Identity) -> dict[str, object]:
+    result: dict[str, object] = {
+        "manufacturer": identity.manufacturer,
+        "model": identity.model,
+        "bios_version": identity.bios_version,
+    }
+    if identity.revision is not None:
+        result["revision"] = identity.revision
+    return result
+
+
+def _release_dict(release: Release) -> dict[str, object]:
+    return {
+        "product_id": release.product_id,
+        "version": release.version,
+        "date": release.date,
+        "beta": release.beta,
+    }
+
+
+def _publisher_checksum(release: Release, status: str) -> dict[str, str]:
+    if release.publisher_sha256 is None:
+        return {"status": "unavailable"}
+    return {
+        "status": status,
+        "algorithm": "sha256",
+        "expected": release.publisher_sha256,
+        "target": release.publisher_checksum_target,
+    }
+
+
+def resolution_document(
+    selection: IdentitySelection, release: Release, identity_source: str,
+    tool_version: str,
+) -> dict[str, object]:
+    return {
+        "format_version": FETCH_FORMAT_VERSION,
+        "operation": "resolve",
+        "tool_version": tool_version,
+        "identity_source": identity_source,
+        "detected_identity": selection.detected_identity,
+        "overrides": selection.overrides,
+        "selected_identity": _selected_dict(selection.selected_identity),
+        "release": _release_dict(release),
+        "support_url": selection.product.support_url,
+        "download_url": release.download_url,
+        "publisher_checksum": _publisher_checksum(release, "advertised"),
+    }
+
+
+def provenance_document(
+    selection: IdentitySelection, release: Release, artifact: safety.HttpResult,
+    image: ValidatedImage, identity_source: str, tool_version: str, fetched_at: str,
+) -> dict[str, object]:
+    warnings = list(image.parser_warnings)
+    if image.publisher_checksum_status == "unavailable":
+        warnings.append("Publisher SHA-256 was unavailable.")
+    detected_version = selection.detected_identity.get("bios_version")
+    if ("bios_version" in selection.overrides and detected_version
+            and detected_version.casefold() != selection.selected_identity.bios_version.casefold()):
+        warnings.append(
+            f"Selected BIOS version {selection.selected_identity.bios_version!r} differs "
+            f"from detected version {detected_version!r}.")
+    return {
+        "format_version": FETCH_FORMAT_VERSION,
+        "tool_version": tool_version,
+        "fetched_at": fetched_at,
+        "identity_source": identity_source,
+        "detected_identity": selection.detected_identity,
+        "overrides": selection.overrides,
+        "selected_identity": _selected_dict(selection.selected_identity),
+        "release": _release_dict(release),
+        "support_url": selection.product.support_url,
+        "download_url": release.download_url,
+        "final_download_url": artifact.final_url,
+        "artifact": {
+            "size": image.artifact_size,
+            "sha256": image.artifact_sha256,
+        },
+        "publisher_checksum": _publisher_checksum(
+            release, image.publisher_checksum_status),
+        "image": {
+            "filename": image.image_name,
+            "size": len(image.image_data),
+            "file_sha256": image.capsule.file_sha256,
+            "payload_sha256": image.capsule.payload_sha256,
+        },
+        "validation": {
+            "settings_count": image.settings_count,
+            "installed_firmware_identity": "unverified",
+        },
+        "warnings": warnings,
+    }
 
 
 def select_release(releases: list[Release], requested_version: str) -> Release:
