@@ -1,10 +1,17 @@
+import hashlib
+import io
 import json
+import stat
+import struct
+import warnings
+import zipfile
 from dataclasses import replace
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
+from tests import fixtures
 from uefi_mirror import fetch
 
 FIXTURE = Path(__file__).parent / "data" / "asus_x870e_e_bios.json"
@@ -17,6 +24,34 @@ def _metadata() -> bytes:
 def _records() -> tuple[fetch.Product, list[fetch.Release]]:
     product = fetch.supported_model("ASUSTeK COMPUTER INC.", "rog strix x870e-e gaming wifi")
     return product, fetch.parse_asus_metadata(_metadata(), product)
+
+
+def _zip(*members, compression=zipfile.ZIP_DEFLATED) -> bytes:
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", compression=compression) as archive:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            for name, data in members:
+                archive.writestr(name, data)
+    return output.getvalue()
+
+
+def _artifact(data: bytes, name: str) -> fetch.safety.HttpResult:
+    return fetch.safety.HttpResult(data, f"https://dlcdnets.asus.com/files/{name}")
+
+
+def _release(data: bytes, *, checksum=True, target="artifact") -> fetch.Release:
+    release = _records()[1][0]
+    digest = hashlib.sha256(data).hexdigest() if checksum else None
+    return replace(release, publisher_sha256=digest, publisher_checksum_target=target)
+
+
+def _patch_zip_field(data: bytes, signature: bytes, offset: int, value: int) -> bytes:
+    changed = bytearray(data)
+    position = changed.find(signature)
+    assert position >= 0
+    struct.pack_into("<I" if value > 0xffff else "<H", changed, position + offset, value)
+    return bytes(changed)
 
 
 def test_supported_model_uses_the_reviewed_asus_endpoint():
@@ -162,6 +197,177 @@ def test_vendor_reads_use_reviewed_hosts_limits_and_one_shared_budget(monkeypatc
     assert calls[1][1:4] == (
         fetch.safety.MAX_ARTIFACT_BYTES, fetch.ASUS_ARTIFACT_HOSTS, "ASUS BIOS artifact")
     assert calls[0][4] is calls[1][4] is budget
+
+
+def test_direct_image_is_checksum_verified_and_parser_validated():
+    image = fixtures.build_capsule()
+    result = fetch.validate_artifact(_release(image), _artifact(image, "BIOS.CAP"))
+
+    assert result.image_name == "BIOS.CAP"
+    assert result.image_data == image
+    assert result.artifact_size == len(image)
+    assert result.artifact_sha256 == hashlib.sha256(image).hexdigest()
+    assert result.publisher_checksum_status == "verified"
+    assert result.capsule.data == fixtures.build_image()
+    assert result.settings_count == 1
+
+
+def test_zip_selects_one_safe_nested_image_and_ignores_tools():
+    image = fixtures.build_capsule()
+    artifact = _zip(
+        ("nested/BIOS.CAP", image),
+        ("BIOSRenamer.exe", b"MZ-not-executed"),
+        ("notes/config.cfg", b"configuration"),
+    )
+    result = fetch.validate_artifact(
+        _release(artifact), _artifact(artifact, "update.zip"))
+
+    assert result.image_name == "BIOS.CAP"
+    assert result.image_data == image
+    assert result.publisher_checksum_status == "verified"
+    assert result.settings_count == 1
+
+
+def test_image_scoped_and_missing_publisher_checksums_are_distinct():
+    image = fixtures.build_capsule()
+    artifact = _zip(("BIOS.CAP", image))
+    image_scoped = replace(
+        _release(artifact), publisher_sha256=hashlib.sha256(image).hexdigest(),
+        publisher_checksum_target="image")
+
+    verified = fetch.validate_artifact(image_scoped, _artifact(artifact, "update.zip"))
+    unavailable = fetch.validate_artifact(
+        _release(image, checksum=False), _artifact(image, "BIOS.CAP"))
+
+    assert verified.publisher_checksum_status == "verified"
+    assert unavailable.publisher_checksum_status == "unavailable"
+
+
+@pytest.mark.parametrize("checksum,target,match", [
+    ("0" * 64, "artifact", "mismatch"),
+    ("bad", "artifact", "malformed"),
+    ("0" * 64, "unknown", "unsupported target"),
+])
+def test_bad_publisher_checksum_fails_before_image_parsing(checksum, target, match):
+    release = replace(
+        _records()[1][0], publisher_sha256=checksum,
+        publisher_checksum_target=target)
+    with pytest.raises(ValueError, match=match):
+        fetch.validate_artifact(release, _artifact(b"not firmware", "BIOS.CAP"))
+
+
+@pytest.mark.parametrize("name", [
+    "../BIOS.CAP",
+    "/absolute/BIOS.CAP",
+    "C:\\BIOS.CAP",
+    "\\\\server\\share\\BIOS.CAP",
+    "safe/../../BIOS.CAP",
+    "safe\\..\\BIOS.CAP",
+    "CON.CAP",
+    "BIOS.CAP:stream",
+    "BIOS\x7f.CAP",
+])
+def test_zip_rejects_unsafe_image_paths(name):
+    artifact = _zip((name, fixtures.build_capsule()))
+    with pytest.raises(ValueError, match="unsafe"):
+        fetch.validate_artifact(
+            _release(artifact), _artifact(artifact, "update.zip"))
+
+
+def test_zip_rejects_unsafe_unrelated_paths_and_duplicate_names():
+    image = fixtures.build_capsule()
+    unsafe = _zip(("../notes.txt", b"x"), ("BIOS.CAP", image))
+    duplicate = _zip(("BIOS.CAP", image), ("bios.cap", image))
+
+    with pytest.raises(ValueError, match="unsafe"):
+        fetch.validate_artifact(_release(unsafe), _artifact(unsafe, "update.zip"))
+    with pytest.raises(ValueError, match="duplicate"):
+        fetch.validate_artifact(
+            _release(duplicate), _artifact(duplicate, "update.zip"))
+
+
+def test_zip_rejects_multiple_missing_and_nested_images():
+    image = fixtures.build_capsule()
+    cases = (
+        (_zip(("one.CAP", image), ("two.ROM", image)), "multiple firmware images"),
+        (_zip(("readme.txt", b"none")), "no supported firmware image"),
+        (_zip(("nested.zip", b"not opened"), ("BIOS.CAP", image)),
+         "nested ZIP archives"),
+    )
+    for artifact, match in cases:
+        with pytest.raises(ValueError, match=match):
+            fetch.validate_artifact(
+                _release(artifact), _artifact(artifact, "update.zip"))
+
+
+def test_zip_rejects_symlink_and_encrypted_image_members():
+    link = zipfile.ZipInfo("BIOS.CAP")
+    link.create_system = 3
+    link.external_attr = (stat.S_IFLNK | 0o777) << 16
+    symlink = _zip((link, b"target"))
+    with pytest.raises(ValueError, match="not a regular file"):
+        fetch.validate_artifact(_release(symlink), _artifact(symlink, "update.zip"))
+
+    encrypted = _zip(("BIOS.CAP", fixtures.build_capsule()))
+    encrypted = _patch_zip_field(encrypted, b"PK\x03\x04", 6, 1)
+    encrypted = _patch_zip_field(encrypted, b"PK\x01\x02", 8, 1)
+    with pytest.raises(ValueError, match="encrypted"):
+        fetch.validate_artifact(
+            _release(encrypted), _artifact(encrypted, "update.zip"))
+
+
+def test_zip_enforces_entry_and_advertised_size_limits():
+    too_many = _zip(*((f"notes/{index}.txt", b"")
+                      for index in range(fetch.MAX_ZIP_ENTRIES + 1)))
+    with pytest.raises(ValueError, match="entry limit"):
+        fetch.validate_artifact(
+            _release(too_many), _artifact(too_many, "update.zip"))
+
+    oversized = _zip(("BIOS.CAP", b"x"))
+    oversized = _patch_zip_field(
+        oversized, b"PK\x01\x02", 24, fetch.cap.MAX_IMAGE_BYTES + 1)
+    with pytest.raises(ValueError, match="firmware image exceeds"):
+        fetch.validate_artifact(
+            _release(oversized), _artifact(oversized, "update.zip"))
+
+    huge = _zip(("BIOS.CAP", b"x"))
+    huge = _patch_zip_field(
+        huge, b"PK\x01\x02", 24, fetch.MAX_ZIP_UNCOMPRESSED + 1)
+    with pytest.raises(ValueError, match="uncompressed limit"):
+        fetch.validate_artifact(_release(huge), _artifact(huge, "update.zip"))
+
+
+def test_zip_rejects_unsupported_compression_and_crc_corruption():
+    unsupported = _zip(("BIOS.CAP", b"firmware"), compression=zipfile.ZIP_STORED)
+    unsupported = _patch_zip_field(unsupported, b"PK\x03\x04", 8, 99)
+    unsupported = _patch_zip_field(unsupported, b"PK\x01\x02", 10, 99)
+    with pytest.raises(ValueError, match="unsupported compression"):
+        fetch.validate_artifact(
+            _release(unsupported), _artifact(unsupported, "update.zip"))
+
+    corrupt = bytearray(_zip(("BIOS.CAP", fixtures.build_capsule()),
+                             compression=zipfile.ZIP_STORED))
+    local = corrupt.find(b"PK\x03\x04")
+    name_length = struct.unpack_from("<H", corrupt, local + 26)[0]
+    extra_length = struct.unpack_from("<H", corrupt, local + 28)[0]
+    corrupt[local + 30 + name_length + extra_length] ^= 0xff
+    corrupt = bytes(corrupt)
+    with pytest.raises(ValueError, match="invalid or unsupported ZIP"):
+        fetch.validate_artifact(_release(corrupt), _artifact(corrupt, "update.zip"))
+
+
+@pytest.mark.parametrize("name,data,match", [
+    ("update.exe", b"MZ", "unsupported BIOS artifact container"),
+    ("update.zip", b"not a ZIP", "invalid or unsupported ZIP"),
+    ("BIOS.CAP", b"<!doctype html><html>error</html>", "HTML"),
+    ("BIOS.CAP", b"not firmware", "no parseable settings"),
+    ("CON.CAP", b"not firmware", "unsafe firmware image filename"),
+    ("fetch.json", b"not firmware", "unsafe firmware image filename"),
+])
+def test_artifact_rejects_unsupported_or_unusable_content(name, data, match):
+    with pytest.raises(ValueError, match=match):
+        fetch.validate_artifact(
+            _release(data, checksum=False), _artifact(data, name))
 
 
 def test_missing_and_ambiguous_releases_fail_instead_of_selecting_latest():

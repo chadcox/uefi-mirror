@@ -52,14 +52,12 @@ def _looks_like_capsule(data: bytes) -> tuple[int, int, int] | None:
     return header_size, flags, image_size
 
 
-def load(path: str) -> Capsule:
-    """Read a .CAP/.ROM, strip the capsule wrapper if one is really there."""
-    with open(path, "rb") as fh:
-        data = fh.read(MAX_IMAGE_BYTES + 1)
+def parse(data: bytes, name: str = "image") -> Capsule:
+    """Parse in-memory .CAP/.ROM bytes, stripping a real capsule wrapper."""
     if len(data) > MAX_IMAGE_BYTES:
-        raise ValueError(f"{path}: larger than the {MAX_IMAGE_BYTES} byte limit")
+        raise ValueError(f"{name}: larger than the {MAX_IMAGE_BYTES} byte limit")
     if not data:
-        raise ValueError(f"{path}: empty")
+        raise ValueError(f"{name}: empty")
 
     file_sha = hashlib.sha256(data).hexdigest()
     header = _looks_like_capsule(data)
@@ -70,7 +68,7 @@ def load(path: str) -> Capsule:
     header_size, flags, image_size = header
     payload = data[header_size:image_size]
     if FV_SIGNATURE not in payload[:MAX_IMAGE_BYTES]:
-        raise ValueError(f"{path}: no firmware volume found after the capsule header")
+        raise ValueError(f"{name}: no firmware volume found after the capsule header")
     return Capsule(
         data=payload,
         file_sha256=file_sha,
@@ -80,3 +78,10 @@ def load(path: str) -> Capsule:
         flags=flags,
         image_size=image_size,
     )
+
+
+def load(path: str) -> Capsule:
+    """Read a .CAP/.ROM, strip the capsule wrapper if one is really there."""
+    with open(path, "rb") as fh:
+        data = fh.read(MAX_IMAGE_BYTES + 1)
+    return parse(data, path)

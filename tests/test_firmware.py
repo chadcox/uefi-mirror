@@ -24,6 +24,14 @@ def test_capsule_header_is_stripped(tmp_path):
     assert capsule.file_sha256 != capsule.payload_sha256
 
 
+def test_in_memory_capsule_parser_matches_file_loader(tmp_path):
+    data = fixtures.build_capsule()
+    path = tmp_path / "bios.CAP"
+    path.write_bytes(data)
+
+    assert cap.parse(data, "bios.CAP") == cap.load(str(path))
+
+
 def test_raw_image_without_capsule_is_passed_through(tmp_path):
     path = tmp_path / "bios.ROM"
     path.write_bytes(fixtures.build_image())
