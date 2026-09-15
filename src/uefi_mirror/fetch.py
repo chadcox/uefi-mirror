@@ -94,6 +94,13 @@ class Identity:
 
 
 @dataclass(frozen=True)
+class IdentityRequest:
+    detected_identity: dict[str, str]
+    overrides: dict[str, str]
+    requested_identity: Identity
+
+
+@dataclass(frozen=True)
 class IdentitySelection:
     detected_identity: dict[str, str]
     overrides: dict[str, str]
@@ -111,18 +118,6 @@ class ValidatedImage:
     capsule: cap.Capsule
     settings_count: int
     parser_warnings: tuple[str, ...]
-
-
-_X870E_E = Product(
-    manufacturer="ASUS",
-    model="ROG STRIX X870E-E GAMING WIFI",
-    product_id="rog strix x870e-e gaming wifi",
-    support_url=(
-        "https://www.asus.com/supportonly/"
-        "rog%20strix%20x870e-e%20gaming%20wifi/helpdesk_bios/"
-    ),
-)
-SUPPORTED_MODELS = {("asus", _X870E_E.model.casefold()): _X870E_E}
 
 
 def _text(value: object) -> str:
@@ -150,20 +145,12 @@ def _override(name: str, value: str | None) -> str | None:
     return _vendor(cleaned) if name == "manufacturer" else cleaned
 
 
-def supported_model(manufacturer: str, model: str) -> Product:
-    key = (_vendor(manufacturer).casefold(), _text(model).casefold())
-    try:
-        return SUPPORTED_MODELS[key]
-    except KeyError as exc:
-        raise ValueError(f"unsupported BIOS fetch target: {manufacturer} {model}".strip()) from exc
-
-
 def resolve_identity(
     dmi: Mapping[str, object], *, manufacturer: str | None = None,
     model: str | None = None, revision: str | None = None,
     bios_version: str | None = None,
-) -> IdentitySelection:
-    """Select a supported product without changing the detected DMI facts."""
+) -> IdentityRequest:
+    """Resolve the requested ASUS identity without changing detected DMI facts."""
     detected = {key: value for key in _DMI_FIELDS
                 if (value := _dmi_text(dmi.get(key)))}
     supplied = {
@@ -203,15 +190,29 @@ def resolve_identity(
     ) if not value]
     if missing:
         raise ValueError(f"missing BIOS identity; pass {', '.join(missing)}")
+    if selected_manufacturer != "ASUS":
+        raise ValueError(
+            f"BIOS fetch supports only ASUS, not {selected_manufacturer!r}")
 
-    product = supported_model(selected_manufacturer, selected_model)
     identity = Identity(
-        manufacturer=product.manufacturer,
-        model=product.model,
+        manufacturer=selected_manufacturer,
+        model=selected_model,
         bios_version=selected_version,
         revision=supplied["revision"] or detected.get("board_version") or None,
     )
-    return IdentitySelection(detected, overrides, identity, product)
+    return IdentityRequest(detected, overrides, identity)
+
+
+def confirm_identity(request: IdentityRequest, product: Product) -> IdentitySelection:
+    """Confirm a request with the canonical product returned by ASUS."""
+    identity = Identity(
+        manufacturer=product.manufacturer,
+        model=product.model,
+        bios_version=request.requested_identity.bios_version,
+        revision=request.requested_identity.revision,
+    )
+    return IdentitySelection(
+        request.detected_identity, request.overrides, identity, product)
 
 
 def _mapping(value: object, where: str) -> Mapping[str, object]:

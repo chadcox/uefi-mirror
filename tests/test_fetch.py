@@ -35,8 +35,20 @@ def _metadata() -> bytes:
     return FIXTURE.read_bytes()
 
 
+def _product() -> fetch.Product:
+    return fetch.Product(
+        manufacturer="ASUS",
+        model="ROG STRIX X870E-E GAMING WIFI",
+        product_id="rog strix x870e-e gaming wifi",
+        support_url=(
+            "https://www.asus.com/supportonly/"
+            "rog%20strix%20x870e-e%20gaming%20wifi/helpdesk_bios/"
+        ),
+    )
+
+
 def _records() -> tuple[fetch.Product, list[fetch.Release]]:
-    product = fetch.supported_model("ASUSTeK COMPUTER INC.", "rog strix x870e-e gaming wifi")
+    product = _product()
     return product, fetch.parse_asus_metadata(_metadata(), product)
 
 
@@ -111,11 +123,10 @@ def _identity_snapshot(root: Path, dmi: dict, payload: bytes | None = None) -> P
     return root
 
 
-def test_supported_model_uses_the_reviewed_asus_endpoint():
-    product = fetch.supported_model("ASUSTeK COMPUTER INC.", " ROG  STRIX X870E-E GAMING WIFI ")
+def test_product_uses_the_reviewed_asus_endpoint():
+    product = _product()
     url = urlsplit(product.metadata_url)
 
-    assert product is fetch.SUPPORTED_MODELS[("asus", product.model.casefold())]
     assert (url.scheme, url.netloc, url.path) == (
         "https", "www.asus.com", "/support/webapi/ProductV2/GetPDBIOS")
     assert parse_qs(url.query)["model"] == ["rog strix x870e-e gaming wifi"]
@@ -147,9 +158,38 @@ def test_leading_zeroes_are_part_of_the_exact_version():
         fetch.select_release(releases, "706")
 
 
+def test_arbitrary_exact_asus_retail_model_produces_identity_request():
+    request = fetch.resolve_identity(
+        {},
+        manufacturer="ASUS",
+        model="ProArt X870E-CREATOR WIFI",
+        bios_version="1001",
+    )
+
+    assert isinstance(request, fetch.IdentityRequest)
+    assert request.requested_identity == fetch.Identity(
+        "ASUS", "ProArt X870E-CREATOR WIFI", "1001")
+
+
+@pytest.mark.parametrize(
+    "alias", ["ASUS", "asus", "ASUSTeK COMPUTER INC.", "asustek computer inc"]
+)
+def test_asus_manufacturer_aliases_normalize(alias):
+    request = fetch.resolve_identity(
+        {}, manufacturer=alias, model="PRIME X870-P WIFI", bios_version="0812")
+
+    assert request.requested_identity.manufacturer == "ASUS"
+
+
+def test_non_asus_manufacturer_fails_before_network_access():
+    with pytest.raises(ValueError, match="only ASUS"):
+        fetch.resolve_identity(
+            {}, manufacturer="Gigabyte", model="X870 AORUS ELITE", bios_version="F3")
+
+
 def test_dmi_identity_resolves_the_installed_release_without_rewriting_facts():
     product, releases = _records()
-    selection = fetch.resolve_identity({
+    request = fetch.resolve_identity({
         "sys_vendor": " ASUSTeK  COMPUTER INC. ",
         "product_name": "System Product Name",
         "board_vendor": "ASUSTeK COMPUTER INC.",
@@ -157,35 +197,52 @@ def test_dmi_identity_resolves_the_installed_release_without_rewriting_facts():
         "board_version": " Rev 1.xx ",
         "bios_version": " 2402 ",
     })
+    selection = fetch.confirm_identity(request, product)
 
-    assert selection.detected_identity == {
+    assert request.detected_identity == {
         "sys_vendor": "ASUSTeK COMPUTER INC.",
         "board_vendor": "ASUSTeK COMPUTER INC.",
         "board_name": product.model,
         "board_version": "Rev 1.xx",
         "bios_version": "2402",
     }
-    assert selection.overrides == {}
-    assert selection.selected_identity == fetch.Identity(
+    assert request.overrides == {}
+    assert request.requested_identity == fetch.Identity(
         "ASUS", product.model, "2402", "Rev 1.xx")
+    assert selection.selected_identity == request.requested_identity
     assert fetch.resolve_release(selection, releases).version == "2402"
 
 
 def test_explicit_identity_works_when_dmi_is_missing_or_placeholder():
-    selection = fetch.resolve_identity(
+    request = fetch.resolve_identity(
         {"sys_vendor": "System manufacturer", "board_name": "Default string"},
         manufacturer="asus", model="rog strix x870e-e gaming wifi",
         bios_version="0706", revision=" 1.0 ",
     )
 
-    assert selection.detected_identity == {}
-    assert selection.overrides == {
+    assert request.detected_identity == {}
+    assert request.overrides == {
         "manufacturer": "ASUS",
         "model": "rog strix x870e-e gaming wifi",
         "revision": "1.0",
         "bios_version": "0706",
     }
-    assert selection.selected_identity.bios_version == "0706"
+    assert request.requested_identity.bios_version == "0706"
+
+
+def test_confirm_identity_uses_canonical_model_without_rewriting_request():
+    request = fetch.resolve_identity(
+        FETCH_DMI, manufacturer="asustek computer inc.",
+        model="rog strix x870e-e gaming wifi")
+    detected = request.detected_identity
+    overrides = request.overrides
+
+    selection = fetch.confirm_identity(request, _product())
+
+    assert selection.detected_identity is detected
+    assert selection.overrides is overrides
+    assert selection.selected_identity == fetch.Identity(
+        "ASUS", "ROG STRIX X870E-E GAMING WIFI", "2402", "Rev 1.xx")
 
 
 def test_oem_board_identity_requires_complete_explicit_selection():
@@ -197,10 +254,10 @@ def test_oem_board_identity_requires_complete_explicit_selection():
     with pytest.raises(ValueError, match="system vendor.*differs from board vendor"):
         fetch.resolve_identity(dmi)
 
-    selection = fetch.resolve_identity(
+    request = fetch.resolve_identity(
         dmi, manufacturer="ASUS", model="ROG STRIX X870E-E GAMING WIFI",
         bios_version="2402")
-    assert selection.selected_identity.manufacturer == "ASUS"
+    assert request.requested_identity.manufacturer == "ASUS"
 
 
 def test_different_model_override_requires_its_own_version():
@@ -225,9 +282,10 @@ def test_incomplete_identity_reports_the_required_overrides(dmi, match):
 
 
 def test_cross_product_release_list_is_rejected():
-    selection = fetch.resolve_identity(
+    request = fetch.resolve_identity(
         {}, manufacturer="ASUS", model="ROG STRIX X870E-E GAMING WIFI",
         bios_version="2402")
+    selection = fetch.confirm_identity(request, _product())
     other = replace(_records()[1][0], product_id="another product")
 
     with pytest.raises(ValueError, match="different product"):
@@ -235,7 +293,7 @@ def test_cross_product_release_list_is_rejected():
 
 
 def test_vendor_reads_use_reviewed_hosts_limits_and_one_shared_budget(monkeypatch):
-    product = fetch.supported_model("ASUS", "ROG STRIX X870E-E GAMING WIFI")
+    product = _product()
     budget = fetch.safety.HttpBudget()
     calls = []
 
@@ -513,7 +571,7 @@ def test_resolve_only_json_does_not_download_or_write(tmp_path, monkeypatch):
     assert list(tmp_path.iterdir()) == []
 
 
-def test_fetch_uses_validated_snapshot_identity_without_reading_local_dmi(
+def test_fetch_uses_validated_snapshot_without_reading_local_dmi(
         tmp_path, monkeypatch):
     _image, artifact, metadata = _fetch_inputs()
     calls = _fake_fetch_network(monkeypatch, artifact, metadata)
@@ -563,7 +621,7 @@ def test_fetch_help_exposes_the_public_contract():
         assert option in output
 
 
-def test_fetch_accepts_complete_explicit_identity_without_dmi(monkeypatch):
+def test_fetch_accepts_complete_explicit_target_without_dmi(monkeypatch):
     _image, artifact, metadata = _fetch_inputs()
     calls = _fake_fetch_network(monkeypatch, artifact, metadata)
     monkeypatch.setattr(cli.platform, "dmi", lambda: {})
@@ -637,8 +695,8 @@ def test_fetch_reports_partial_output_when_manifest_write_fails(tmp_path, monkey
 def test_provenance_warns_when_override_differs_from_detected_version():
     image = fixtures.build_capsule()
     artifact = _artifact(image, "BIOS.CAP")
-    selection = fetch.resolve_identity(
-        FETCH_DMI, bios_version="2401")
+    request = fetch.resolve_identity(FETCH_DMI, bios_version="2401")
+    selection = fetch.confirm_identity(request, _product())
     release = replace(_release(image), version="2401")
     validated = fetch.validate_artifact(release, artifact)
 
