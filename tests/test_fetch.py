@@ -1,3 +1,4 @@
+import datetime
 import hashlib
 import io
 import json
@@ -18,7 +19,22 @@ from typer.testing import CliRunner
 from tests import fixtures
 from uefi_mirror import cli, decode, fetch
 
-FIXTURE = Path(__file__).parent / "data" / "asus_x870e_e_bios.json"
+DATA = Path(__file__).parent / "data"
+
+
+def _fixture_path(model: str) -> Path:
+    slug = re.sub(r"[^a-z0-9]+", "_", model.casefold()).strip("_")
+    return DATA / f"asus_{slug}_bios.json"
+
+
+FIXTURE = _fixture_path("ROG STRIX X870E-E GAMING WIFI")
+REPRESENTATIVE_FIXTURES = (
+    ("ROG STRIX X870E-E GAMING WIFI", "2402", "1701", "2401", "0706", None),
+    ("ROG STRIX B650E-F GAMING WIFI", "3881", "3854", "3886", None, "3854"),
+    ("TUF GAMING X870-PLUS WIFI", "1681", "1654", "1686", "0237", None),
+    ("PRIME X570-P", "5044", "5031", "5041", None, "5031"),
+    ("ROG STRIX Z790-E GAMING WIFI", "3202", "2102", None, None, "2102"),
+)
 RUNNER = CliRunner()
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 FETCH_DMI = {
@@ -40,16 +56,16 @@ def _product() -> fetch.Product:
         manufacturer="ASUS",
         model="ROG STRIX X870E-E GAMING WIFI",
         product_id="rog strix x870e-e gaming wifi",
-        support_url=(
-            "https://www.asus.com/supportonly/"
-            "rog%20strix%20x870e-e%20gaming%20wifi/helpdesk_bios/"
-        ),
+        support_url="https://www.asus.com/support/download-center/",
     )
 
 
 def _records() -> tuple[fetch.Product, list[fetch.Release]]:
-    product = _product()
-    return product, fetch.parse_asus_metadata(_metadata(), product)
+    return fetch.parse_asus_metadata(
+        _metadata(),
+        "ROG STRIX X870E-E GAMING WIFI",
+        "rog strix x870e-e gaming wifi",
+    )
 
 
 def _zip(*members, compression=zipfile.ZIP_DEFLATED) -> bytes:
@@ -123,13 +139,73 @@ def _identity_snapshot(root: Path, dmi: dict, payload: bytes | None = None) -> P
     return root
 
 
-def test_product_uses_the_reviewed_asus_endpoint():
-    product = _product()
-    url = urlsplit(product.metadata_url)
+@pytest.mark.parametrize(
+    "model,stable,older,beta,leading_zero,uppercase_mb",
+    REPRESENTATIVE_FIXTURES,
+)
+def test_representative_metadata_fixtures_resolve_dynamically(
+        model, stable, older, beta, leading_zero, uppercase_mb):
+    path = _fixture_path(model)
+    document = json.loads(path.read_bytes())
+    requested_model = f"  {model.swapcase()}  "
+    product_id, metadata_url = fetch.asus_metadata_url(requested_model)
+    product, releases = fetch.parse_asus_metadata(
+        path.read_bytes(), requested_model, product_id)
+    query = parse_qs(urlsplit(metadata_url).query)
 
-    assert (url.scheme, url.netloc, url.path) == (
+    assert query["model"] == [model.casefold()]
+    assert product == fetch.Product(
+        "ASUS",
+        model,
+        model.casefold(),
+        "https://www.asus.com/support/download-center/",
+    )
+    assert fetch.select_release(releases, stable).beta is False
+    assert fetch.select_release(releases, older).beta is False
+    if beta is not None:
+        assert fetch.select_release(releases, beta).beta is True
+    if leading_zero is not None:
+        assert fetch.select_release(releases, leading_zero).version == leading_zero
+        with pytest.raises(ValueError, match="no BIOS release exactly matching"):
+            fetch.select_release(releases, leading_zero.lstrip("0"))
+    if uppercase_mb is not None:
+        assert "/ASUS/MB/BIOS/" in fetch.select_release(
+            releases, uppercase_mb).download_url
+    assert not hasattr(fetch, "SUPPORTED_MODELS")
+    assert document["Result"]["Model"] == product.model
+
+
+@pytest.mark.parametrize(
+    "model,_stable,_older,_beta,_leading_zero,_uppercase_mb",
+    REPRESENTATIVE_FIXTURES,
+)
+def test_representative_fixture_provenance_is_valid(
+        model, _stable, _older, _beta, _leading_zero, _uppercase_mb):
+    document = json.loads(_fixture_path(model).read_bytes())
+    provenance = document["_fixture"]
+    source = urlsplit(provenance["source"])
+    retrieved = datetime.date.fromisoformat(provenance["retrieved"])
+
+    assert (source.scheme, source.netloc, source.path) == (
         "https", "www.asus.com", "/support/webapi/ProductV2/GetPDBIOS")
-    assert parse_qs(url.query)["model"] == ["rog strix x870e-e gaming wifi"]
+    assert parse_qs(source.query)["model"] == [model.casefold()]
+    assert retrieved <= datetime.date.today()
+    assert "Sanitized to parser-consumed fields" in provenance["note"]
+
+
+@pytest.mark.parametrize(
+    "model,_stable,_older,_beta,_leading_zero,_uppercase_mb",
+    REPRESENTATIVE_FIXTURES,
+)
+def test_materially_different_metadata_echo_fails(
+        model, _stable, _older, _beta, _leading_zero, _uppercase_mb):
+    document = json.loads(_fixture_path(model).read_bytes())
+    document["Result"]["Model"] = f"{model} II"
+    product_id, _url = fetch.asus_metadata_url(model)
+
+    with pytest.raises(ValueError, match="returned product"):
+        fetch.parse_asus_metadata(
+            json.dumps(document).encode(), model, product_id)
 
 
 def test_exact_older_and_beta_releases_are_selected_from_offline_metadata():
@@ -138,7 +214,7 @@ def test_exact_older_and_beta_releases_are_selected_from_offline_metadata():
     older = fetch.select_release(releases, "1701")
     beta = fetch.select_release(releases, " 2401 ")
 
-    assert len(releases) == 4  # The unrelated Firmware category is ignored.
+    assert len(releases) == 4
     assert older.product_id == product.product_id
     assert older.download_url == (
         "https://dlcdnets.asus.com/pub/ASUS/mb/BIOS/"
@@ -149,13 +225,6 @@ def test_exact_older_and_beta_releases_are_selected_from_offline_metadata():
     assert beta.publisher_sha256 == (
         "d26c830a48def3bbb741aba75e1563b76b712f92b609f13f2bdb1079159d17d5"
     )
-
-
-def test_leading_zeroes_are_part_of_the_exact_version():
-    _, releases = _records()
-    assert fetch.select_release(releases, "0706").publisher_sha256 is None
-    with pytest.raises(ValueError, match="no BIOS release exactly matching"):
-        fetch.select_release(releases, "706")
 
 
 def test_arbitrary_exact_asus_retail_model_produces_identity_request():
@@ -293,7 +362,9 @@ def test_cross_product_release_list_is_rejected():
 
 
 def test_vendor_reads_use_reviewed_hosts_limits_and_one_shared_budget(monkeypatch):
-    product = _product()
+    request = fetch.resolve_identity(
+        {}, manufacturer="ASUS", model="ROG STRIX X870E-E GAMING WIFI",
+        bios_version="2402")
     budget = fetch.safety.HttpBudget()
     calls = []
 
@@ -303,9 +374,10 @@ def test_vendor_reads_use_reviewed_hosts_limits_and_one_shared_budget(monkeypatc
         return fetch.safety.HttpResult(data, url)
 
     monkeypatch.setattr(fetch.safety, "read_https", read_https)
-    releases = fetch.fetch_releases(product, budget)
+    product, releases = fetch.fetch_releases(request, budget)
     artifact = fetch.download_artifact(releases[0], budget)
 
+    assert product.model == "ROG STRIX X870E-E GAMING WIFI"
     assert len(releases) == 4 and artifact.data == b"artifact"
     assert calls[0][1:4] == (
         fetch.safety.MAX_METADATA_BYTES, fetch.ASUS_METADATA_HOSTS, "ASUS metadata")
@@ -727,12 +799,15 @@ def test_missing_and_ambiguous_releases_fail_instead_of_selecting_latest():
 
 
 def test_identical_records_are_deduplicated():
-    product, _ = _records()
     document = json.loads(_metadata())
     files = document["Result"]["Obj"][0]["Files"]
     files.append(dict(files[0]))
 
-    releases = fetch.parse_asus_metadata(json.dumps(document).encode(), product)
+    _product, releases = fetch.parse_asus_metadata(
+        json.dumps(document).encode(),
+        "ROG STRIX X870E-E GAMING WIFI",
+        "rog strix x870e-e gaming wifi",
+    )
 
     assert len([release for release in releases if release.version == "2402"]) == 1
 
@@ -751,9 +826,12 @@ def test_identical_records_are_deduplicated():
     (lambda doc: doc["Result"]["Obj"].append(1), "Result.Obj entry must be an object"),
 ])
 def test_changed_or_unsafe_metadata_shape_fails_closed(mutation, match):
-    product, _ = _records()
     document = json.loads(_metadata())
     mutation(document)
 
     with pytest.raises(ValueError, match=match):
-        fetch.parse_asus_metadata(json.dumps(document).encode(), product)
+        fetch.parse_asus_metadata(
+            json.dumps(document).encode(),
+            "ROG STRIX X870E-E GAMING WIFI",
+            "rog strix x870e-e gaming wifi",
+        )

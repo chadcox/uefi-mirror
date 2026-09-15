@@ -1,0 +1,36 @@
+{
+  "_fixture": {
+    "source": "https://www.asus.com/support/webapi/ProductV2/GetPDBIOS?website=global&model=rog%20strix%20z790-e%20gaming%20wifi&pdhashedid=&pdid=99999&cpu=&siteID=www&sitelang=",
+    "retrieved": "2026-09-15",
+    "note": "Sanitized to parser-consumed fields and releases needed for offline contract tests."
+  },
+  "Status": "SUCCESS",
+  "Result": {
+    "Model": "ROG STRIX Z790-E GAMING WIFI",
+    "Obj": [
+      {
+        "Name": "BIOS",
+        "Files": [
+          {
+            "Version": "3202",
+            "ReleaseDate": "2026/08/17",
+            "IsRelease": "1",
+            "DownloadUrl": {
+              "Global": "/pub/ASUS/mb/BIOS/ROG-STRIX-Z790-E-GAMING-WIFI-ASUS-3202.zip"
+            },
+            "sha256": "E4B9C52218CDADDD8D6A571A4AD59AC85F999869574960CA496D99E073972F0A"
+          },
+          {
+            "Version": "2102",
+            "ReleaseDate": "2024/03/19",
+            "IsRelease": "1",
+            "DownloadUrl": {
+              "Global": "/pub/ASUS/MB/BIOS/ROG-STRIX-Z790-E-GAMING-WIFI-ASUS-2102.zip"
+            },
+            "sha256": ""
+          }
+        ]
+      }
+    ]
+  }
+}

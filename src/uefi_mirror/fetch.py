@@ -19,6 +19,7 @@ from .schema import builder
 
 ASUS_METADATA_ENDPOINT = "https://www.asus.com/support/webapi/ProductV2/GetPDBIOS"
 ASUS_ARTIFACT_ORIGIN = "https://dlcdnets.asus.com"
+ASUS_SUPPORT_URL = "https://www.asus.com/support/download-center/"
 ASUS_METADATA_HOSTS = frozenset({"www.asus.com"})
 ASUS_ARTIFACT_HOSTS = frozenset({"dlcdnets.asus.com"})
 MAX_ZIP_ENTRIES = 128
@@ -59,19 +60,6 @@ class Product:
     model: str
     product_id: str
     support_url: str
-
-    @property
-    def metadata_url(self) -> str:
-        query = urlencode({
-            "website": "global",
-            "model": self.product_id,
-            "pdhashedid": "",
-            "pdid": "99999",
-            "cpu": "",
-            "siteID": "www",
-            "sitelang": "",
-        })
-        return f"{ASUS_METADATA_ENDPOINT}?{query}"
 
 
 @dataclass(frozen=True)
@@ -124,6 +112,24 @@ def _text(value: object) -> str:
     if not isinstance(value, str):
         return ""
     return " ".join(value.split())
+
+
+def asus_metadata_url(model: str) -> tuple[str, str]:
+    """Return the normalized product ID and reviewed ASUS metadata URL."""
+    cleaned = _text(model)
+    if not cleaned:
+        raise ValueError("ASUS model must not be blank")
+    product_id = cleaned.casefold()
+    query = urlencode({
+        "website": "global",
+        "model": product_id,
+        "pdhashedid": "",
+        "pdid": "99999",
+        "cpu": "",
+        "siteID": "www",
+        "sitelang": "",
+    })
+    return product_id, f"{ASUS_METADATA_ENDPOINT}?{query}"
 
 
 def _vendor(value: object) -> str:
@@ -228,8 +234,10 @@ def _required_text(record: Mapping[str, object], field: str) -> str:
     return value
 
 
-def parse_asus_metadata(data: bytes, product: Product) -> list[Release]:
-    """Parse the reviewed ASUS GetPDBIOS response without performing I/O."""
+def parse_asus_metadata(
+        data: bytes, requested_model: str,
+        product_id: str) -> tuple[Product, list[Release]]:
+    """Parse ASUS GetPDBIOS metadata and confirm the exact requested model."""
     try:
         root = _mapping(json.loads(data), "root")
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
@@ -238,10 +246,13 @@ def parse_asus_metadata(data: bytes, product: Product) -> list[Release]:
         raise ValueError("ASUS metadata request did not report success")
     result = _mapping(root.get("Result"), "Result")
     returned_model = _required_text(result, "Model")
-    if returned_model.casefold() != product.model.casefold():
+    expected_model = _text(requested_model)
+    if returned_model.casefold() != expected_model.casefold():
         raise ValueError(
-            f"ASUS metadata returned product {returned_model!r}, expected {product.model!r}"
+            f"ASUS metadata returned product {returned_model!r}, "
+            f"expected {expected_model!r}"
         )
+    product = Product("ASUS", returned_model, product_id, ASUS_SUPPORT_URL)
     categories = result.get("Obj")
     if not isinstance(categories, list):
         raise ValueError("ASUS metadata Result.Obj must be an array")
@@ -270,7 +281,8 @@ def parse_asus_metadata(data: bytes, product: Product) -> list[Release]:
             raise ValueError(f"ASUS BIOS {version} has invalid IsRelease")
         urls = _mapping(record.get("DownloadUrl"), f"BIOS {version} DownloadUrl")
         path = _required_text(urls, "Global")
-        if not path.startswith("/pub/ASUS/mb/BIOS/") or path.startswith("//"):
+        if (not path.casefold().startswith("/pub/asus/mb/bios/")
+                or path.startswith("//")):
             raise ValueError(f"ASUS BIOS {version} has an unexpected download path")
         raw_checksum = record.get("sha256", "")
         if not isinstance(raw_checksum, str):
@@ -294,14 +306,18 @@ def parse_asus_metadata(data: bytes, product: Product) -> list[Release]:
         )
         if release not in releases:
             releases.append(release)
-    return releases
+    return product, releases
 
 
-def fetch_releases(product: Product, budget: safety.HttpBudget) -> list[Release]:
+def fetch_releases(
+        request: IdentityRequest,
+        budget: safety.HttpBudget) -> tuple[Product, list[Release]]:
+    model = request.requested_identity.model
+    product_id, metadata_url = asus_metadata_url(model)
     response = safety.read_https(
-        product.metadata_url, safety.MAX_METADATA_BYTES, ASUS_METADATA_HOSTS,
+        metadata_url, safety.MAX_METADATA_BYTES, ASUS_METADATA_HOSTS,
         stage="ASUS metadata", budget=budget)
-    return parse_asus_metadata(response.data, product)
+    return parse_asus_metadata(response.data, model, product_id)
 
 
 def download_artifact(release: Release, budget: safety.HttpBudget) -> safety.HttpResult:

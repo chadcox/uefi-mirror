@@ -1,0 +1,45 @@
+{
+  "_fixture": {
+    "source": "https://www.asus.com/support/webapi/ProductV2/GetPDBIOS?website=global&model=prime%20x570-p&pdhashedid=&pdid=99999&cpu=&siteID=www&sitelang=",
+    "retrieved": "2026-09-15",
+    "note": "Sanitized to parser-consumed fields and releases needed for offline contract tests."
+  },
+  "Status": "SUCCESS",
+  "Result": {
+    "Model": "PRIME X570-P",
+    "Obj": [
+      {
+        "Name": "BIOS",
+        "Files": [
+          {
+            "Version": "5044",
+            "ReleaseDate": "2026/01/27",
+            "IsRelease": "1",
+            "DownloadUrl": {
+              "Global": "/pub/ASUS/mb/BIOS/PRIME-X570-P-ASUS-5044.zip"
+            },
+            "sha256": "34636092E7159776D5A5E93EEEB43F66280823FFB8C11B1E157E5B6A8A369905"
+          },
+          {
+            "Version": "5041",
+            "ReleaseDate": "2025/08/14",
+            "IsRelease": "0",
+            "DownloadUrl": {
+              "Global": "/pub/ASUS/mb/BIOS/PRIME-X570-P-ASUS-5041.zip"
+            },
+            "sha256": "2B2CFD7A1935CB6D14B681F63182C53625034BC85FC26A77D5BB93C8C2DEC5EB"
+          },
+          {
+            "Version": "5031",
+            "ReleaseDate": "2025/04/07",
+            "IsRelease": "1",
+            "DownloadUrl": {
+              "Global": "/pub/ASUS/MB/BIOS/PRIME-X570-P-ASUS-5031.zip"
+            },
+            "sha256": "EE4AE686ADFA47E4D862002D1FD0161A5B7B19EA75732B0D5D92BAAE805CB89C"
+          }
+        ]
+      }
+    ]
+  }
+}

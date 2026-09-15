@@ -1,0 +1,45 @@
+{
+  "_fixture": {
+    "source": "https://www.asus.com/support/webapi/ProductV2/GetPDBIOS?website=global&model=rog%20strix%20b650e-f%20gaming%20wifi&pdhashedid=&pdid=99999&cpu=&siteID=www&sitelang=",
+    "retrieved": "2026-09-15",
+    "note": "Sanitized to parser-consumed fields and releases needed for offline contract tests."
+  },
+  "Status": "SUCCESS",
+  "Result": {
+    "Model": "ROG STRIX B650E-F GAMING WIFI",
+    "Obj": [
+      {
+        "Name": "BIOS",
+        "Files": [
+          {
+            "Version": "3886",
+            "ReleaseDate": "2026/07/02",
+            "IsRelease": "0",
+            "DownloadUrl": {
+              "Global": "/pub/ASUS/mb/BIOS/ROG-STRIX-B650E-F-GAMING-WIFI-ASUS-3886.ZIP"
+            },
+            "sha256": "4127E2ABE0B7DF622B7CEA49287149C9D3136C35598D0A88F9C89A4EB89418BC"
+          },
+          {
+            "Version": "3881",
+            "ReleaseDate": "2026/06/29",
+            "IsRelease": "1",
+            "DownloadUrl": {
+              "Global": "/pub/ASUS/mb/BIOS/ROG-STRIX-B650E-F-GAMING-WIFI-ASUS-3881.ZIP"
+            },
+            "sha256": "A207D283C9BE39E3D2341023B580DADA9DA97DD94958FE77D0D2E5DA70EB1129"
+          },
+          {
+            "Version": "3854",
+            "ReleaseDate": "2026/04/23",
+            "IsRelease": "1",
+            "DownloadUrl": {
+              "Global": "/pub/ASUS/MB/BIOS/ROG-STRIX-B650E-F-GAMING-WIFI-ASUS-3854.ZIP"
+            },
+            "sha256": "5D3EFF23B9F8B5B199FEA65E144E35A1D3936C4C3C16558B00AEE803C26D8472"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,18 +1,15 @@
 {
   "_fixture": {
     "source": "https://www.asus.com/support/webapi/ProductV2/GetPDBIOS?website=global&model=rog%20strix%20x870e-e%20gaming%20wifi&pdhashedid=&pdid=99999&cpu=&siteID=www&sitelang=",
-    "retrieved": "2026-09-09",
-    "note": "Sanitized to the fields and records needed for offline contract tests."
+    "retrieved": "2026-09-15",
+    "note": "Sanitized to parser-consumed fields and releases needed for offline contract tests."
   },
   "Status": "SUCCESS",
-  "Message": "SUCCESS",
   "Result": {
-    "Count": 34,
     "Model": "ROG STRIX X870E-E GAMING WIFI",
     "Obj": [
       {
         "Name": "BIOS",
-        "Count": 1,
         "Files": [
           {
             "Version": "2402",
@@ -47,21 +44,6 @@
             "IsRelease": "1",
             "DownloadUrl": {
               "Global": "/pub/ASUS/mb/BIOS/ROG-STRIX-X870E-E-GAMING-WIFI-ASUS-0706.zip"
-            },
-            "sha256": ""
-          }
-        ]
-      },
-      {
-        "Name": "Firmware",
-        "Count": 1,
-        "Files": [
-          {
-            "Version": "40013",
-            "ReleaseDate": "2024/12/16",
-            "IsRelease": "1",
-            "DownloadUrl": {
-              "Global": "/pub/ASUS/mb/SocketAM5/ROG_STRIX_X870E-E_GAMING_WIFI/ASMx424X_FWUpdateV40013.zip"
             },
             "sha256": ""
           }

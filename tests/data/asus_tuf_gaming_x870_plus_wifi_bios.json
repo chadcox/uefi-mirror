@@ -1,0 +1,54 @@
+{
+  "_fixture": {
+    "source": "https://www.asus.com/support/webapi/ProductV2/GetPDBIOS?website=global&model=tuf%20gaming%20x870-plus%20wifi&pdhashedid=&pdid=99999&cpu=&siteID=www&sitelang=",
+    "retrieved": "2026-09-15",
+    "note": "Sanitized to parser-consumed fields and releases needed for offline contract tests."
+  },
+  "Status": "SUCCESS",
+  "Result": {
+    "Model": "TUF GAMING X870-PLUS WIFI",
+    "Obj": [
+      {
+        "Name": "BIOS",
+        "Files": [
+          {
+            "Version": "1686",
+            "ReleaseDate": "2026/07/02",
+            "IsRelease": "0",
+            "DownloadUrl": {
+              "Global": "/pub/ASUS/mb/BIOS/TUF-GAMING-X870-PLUS-WIFI-ASUS-1686.ZIP"
+            },
+            "sha256": "F448C828E5CC79840F91DE76AE96EF9F93E2DE70BE22FF00479001CB94E1294F"
+          },
+          {
+            "Version": "1681",
+            "ReleaseDate": "2026/06/22",
+            "IsRelease": "1",
+            "DownloadUrl": {
+              "Global": "/pub/ASUS/mb/BIOS/TUF-GAMING-X870-PLUS-WIFI-ASUS-1681.ZIP"
+            },
+            "sha256": "296192D08798F4F206DEA137C02DC5D56047319E3DDD1DDB818D6D0C1770BA18"
+          },
+          {
+            "Version": "1654",
+            "ReleaseDate": "2026/04/27",
+            "IsRelease": "1",
+            "DownloadUrl": {
+              "Global": "/pub/ASUS/mb/BIOS/TUF-GAMING-X870-PLUS-WIFI-ASUS-1654.ZIP"
+            },
+            "sha256": "5514B86AE6A7C6FE9F1BF9E2AD49C46F91581DC66EC93B6F0108C051ED763152"
+          },
+          {
+            "Version": "0237",
+            "ReleaseDate": "2024/07/24",
+            "IsRelease": "1",
+            "DownloadUrl": {
+              "Global": "/pub/ASUS/mb/BIOS/TUF-GAMING-X870-PLUS-WIFI-ASUS-0237.zip"
+            },
+            "sha256": ""
+          }
+        ]
+      }
+    ]
+  }
+}
