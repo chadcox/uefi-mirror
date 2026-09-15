@@ -68,6 +68,47 @@ def _records() -> tuple[fetch.Product, list[fetch.Release]]:
     )
 
 
+@pytest.mark.parametrize(("value", "expected"), [
+    ("/pub/ASUS/mb/BIOS/file.ZIP", "/pub/ASUS/mb/BIOS/file.ZIP"),
+    ("/pub/ASUS/MB/BIOS/file.zip", "/pub/ASUS/MB/BIOS/file.zip"),
+    ("/PuB/aSuS/mB/bIoS/file.zip", "/PuB/aSuS/mB/bIoS/file.zip"),
+    (
+        "/pub/ASUS/mb/BIOS/firmware%20file.zip",
+        "/pub/ASUS/mb/BIOS/firmware%20file.zip",
+    ),
+])
+def test_asus_download_path_accepts_exact_case_insensitive_prefix(
+        value, expected):
+    assert fetch._asus_download_path(value, "2402") == expected
+
+
+@pytest.mark.parametrize("value", [
+    "/pub/ASUS/mb/UEFI/file.zip",
+    "/pub/ASUS/MB/BIOSX/file.zip",
+    "//dlcdnets.asus.com/pub/ASUS/mb/BIOS/file.zip",
+    "https://dlcdnets.asus.com/pub/ASUS/mb/BIOS/file.zip",
+    "/pub/ASUS/mb/BIOS/./file.zip",
+    "/pub/ASUS/mb/BIOS/../file.zip",
+    "/pub/ASUS/mb/BIOS/%2e/file.zip",
+    "/pub/ASUS/mb/BIOS/%2E%2e/file.zip",
+    "/pub/ASUS/mb/BIOS\\file.zip",
+    "/pub/ASUS/mb/BIOS/%5cfile.zip",
+    "/pub/ASUS/mb/BIOS//file.zip",
+    "/pub/ASUS/mb/BIOS/file.zip?download=1",
+    "/pub/ASUS/mb/BIOS/file.zip#fragment",
+    "/pub/ASUS/mb/BIOS/file\x1f.zip",
+    "/pub/ASUS/mb/BIOS/file%1f.zip",
+    "/pub/ASUS/mb/BIOS/",
+])
+def test_asus_download_path_rejects_unsafe_or_ambiguous_paths(value):
+    with pytest.raises(ValueError) as exc:
+        fetch._asus_download_path(value, "2402")
+
+    assert exc.value.args == (
+        "ASUS BIOS 2402 has an unexpected download path",
+    )
+
+
 def _zip(*members, compression=zipfile.ZIP_DEFLATED) -> bytes:
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w", compression=compression) as archive:

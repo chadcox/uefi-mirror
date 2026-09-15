@@ -234,6 +234,34 @@ def _required_text(record: Mapping[str, object], field: str) -> str:
     return value
 
 
+def _asus_download_path(value: object, version: str) -> str:
+    message = f"ASUS BIOS {version} has an unexpected download path"
+    if not isinstance(value, str) or not value:
+        raise ValueError(message)
+    try:
+        parsed = urlsplit(value)
+        decoded = unquote(parsed.path, errors="strict")
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise ValueError(message) from exc
+    components = decoded.split("/")
+    if (
+        parsed.scheme
+        or parsed.netloc
+        or parsed.query
+        or parsed.fragment
+        or parsed.path != value
+        or len(components) < 6
+        or tuple(part.casefold() for part in components[:5])
+        != ("", "pub", "asus", "mb", "bios")
+        or "\\" in decoded
+        or any(ord(char) < 32 or 0x7f <= ord(char) <= 0x9f
+               for char in decoded)
+        or any(part in ("", ".", "..") for part in components[5:])
+    ):
+        raise ValueError(message)
+    return value
+
+
 def parse_asus_metadata(
         data: bytes, requested_model: str,
         product_id: str) -> tuple[Product, list[Release]]:
@@ -280,10 +308,7 @@ def parse_asus_metadata(
         if stable not in ("0", "1"):
             raise ValueError(f"ASUS BIOS {version} has invalid IsRelease")
         urls = _mapping(record.get("DownloadUrl"), f"BIOS {version} DownloadUrl")
-        path = _required_text(urls, "Global")
-        if (not path.casefold().startswith("/pub/asus/mb/bios/")
-                or path.startswith("//")):
-            raise ValueError(f"ASUS BIOS {version} has an unexpected download path")
+        path = _asus_download_path(urls.get("Global"), version)
         raw_checksum = record.get("sha256", "")
         if not isinstance(raw_checksum, str):
             raise ValueError(f"ASUS BIOS {version} has an invalid SHA-256")
