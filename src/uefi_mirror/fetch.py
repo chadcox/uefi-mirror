@@ -27,6 +27,7 @@ MAX_ZIP_UNCOMPRESSED = 256 << 20
 FETCH_FORMAT_VERSION = 1
 _IMAGE_SUFFIXES = frozenset({".cap", ".rom", ".bin", ".fd"})
 _ZIP_COMPRESSION = frozenset({zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED})
+_HEX_DIGITS = "0123456789abcdefABCDEF"
 
 _VENDOR_ALIASES = {
     "asus": "ASUS",
@@ -238,28 +239,47 @@ def _asus_download_path(value: object, version: str) -> str:
     message = f"ASUS BIOS {version} has an unexpected download path"
     if not isinstance(value, str) or not value:
         raise ValueError(message)
+    escape = value.find("%")
+    while escape != -1:
+        if (
+            escape + 2 >= len(value)
+            or value[escape + 1] not in _HEX_DIGITS
+            or value[escape + 2] not in _HEX_DIGITS
+        ):
+            raise ValueError(message)
+        escape = value.find("%", escape + 3)
     try:
         parsed = urlsplit(value)
-        decoded = unquote(parsed.path, errors="strict")
-    except (UnicodeDecodeError, ValueError) as exc:
+    except ValueError as exc:
         raise ValueError(message) from exc
-    components = decoded.split("/")
     if (
         parsed.scheme
         or parsed.netloc
         or parsed.query
         or parsed.fragment
         or parsed.path != value
-        or len(components) < 6
-        or tuple(part.casefold() for part in components[:5])
-        != ("", "pub", "asus", "mb", "bios")
-        or "\\" in decoded
-        or any(ord(char) < 32 or 0x7f <= ord(char) <= 0x9f
-               for char in decoded)
-        or any(part in ("", ".", "..") for part in components[5:])
     ):
         raise ValueError(message)
-    return value
+    decoded = parsed.path
+    try:
+        while True:
+            next_decoded = unquote(decoded, errors="strict")
+            components = next_decoded.split("/")
+            if (
+                len(components) < 6
+                or tuple(part.casefold() for part in components[:5])
+                != ("", "pub", "asus", "mb", "bios")
+                or "\\" in next_decoded
+                or any(ord(char) < 32 or 0x7f <= ord(char) <= 0x9f
+                       for char in next_decoded)
+                or any(part in ("", ".", "..") for part in components[5:])
+            ):
+                raise ValueError(message)
+            if next_decoded == decoded:
+                return value
+            decoded = next_decoded
+    except UnicodeDecodeError as exc:
+        raise ValueError(message) from exc
 
 
 def parse_asus_metadata(

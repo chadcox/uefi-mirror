@@ -91,6 +91,10 @@ def test_asus_download_path_accepts_exact_case_insensitive_prefix(
     "/pub/ASUS/mb/BIOS/../file.zip",
     "/pub/ASUS/mb/BIOS/%2e/file.zip",
     "/pub/ASUS/mb/BIOS/%2E%2e/file.zip",
+    "/pub/ASUS/mb/BIOS/%252e%252e/file.zip",
+    "/pub/ASUS/mb/BIOS/file%ZZ.zip",
+    "/pub/ASUS/mb/BIOS/file%.zip",
+    "/pub/ASUS/mb/BIOS/file%2.zip",
     "/pub/ASUS/mb/BIOS\\file.zip",
     "/pub/ASUS/mb/BIOS/%5cfile.zip",
     "/pub/ASUS/mb/BIOS//file.zip",
@@ -98,11 +102,31 @@ def test_asus_download_path_accepts_exact_case_insensitive_prefix(
     "/pub/ASUS/mb/BIOS/file.zip#fragment",
     "/pub/ASUS/mb/BIOS/file\x1f.zip",
     "/pub/ASUS/mb/BIOS/file%1f.zip",
+    "/pub/ASUS/mb/BIOS/file\x7f.zip",
+    "/pub/ASUS/mb/BIOS/file%7f.zip",
     "/pub/ASUS/mb/BIOS/",
 ])
 def test_asus_download_path_rejects_unsafe_or_ambiguous_paths(value):
     with pytest.raises(ValueError) as exc:
         fetch._asus_download_path(value, "2402")
+
+    assert exc.value.args == (
+        "ASUS BIOS 2402 has an unexpected download path",
+    )
+
+
+def test_asus_path_prefix_parser_routes_global_through_download_path_policy():
+    document = json.loads(_metadata())
+    document["Result"]["Obj"][0]["Files"][0]["DownloadUrl"]["Global"] = (
+        "/pub/ASUS/mb/BIOS/%252e%252e/file.zip"
+    )
+
+    with pytest.raises(ValueError) as exc:
+        fetch.parse_asus_metadata(
+            json.dumps(document).encode(),
+            "ROG STRIX X870E-E GAMING WIFI",
+            "rog strix x870e-e gaming wifi",
+        )
 
     assert exc.value.args == (
         "ASUS BIOS 2402 has an unexpected download path",
