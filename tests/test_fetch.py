@@ -1039,6 +1039,45 @@ def test_format_two_provenance_unavailable_checksum_contract():
     assert provenance["publisher_checksum"] == {"status": "unavailable"}
 
 
+@pytest.mark.parametrize(("checksum_present", "status", "target"), [
+    (False, "unavailable", None),
+    (True, "advertised", "undetermined"),
+    (True, "verified", "artifact"),
+    (True, "verified", "image"),
+])
+def test_format_two_publisher_checksum_accepts_every_valid_state_tuple(
+        checksum_present, status, target):
+    release = _release(fixtures.build_capsule(), checksum=checksum_present)
+
+    checksum = fetch._publisher_checksum(release, status, target)
+
+    if not checksum_present:
+        assert checksum == {"status": "unavailable"}
+    else:
+        assert checksum == {
+            "status": status,
+            "algorithm": "sha256",
+            "expected": release.publisher_sha256,
+            "target": target,
+        }
+
+
+@pytest.mark.parametrize(("checksum_present", "status", "target"), [
+    (False, "advertised", "undetermined"),
+    (False, "verified", "artifact"),
+    (True, "unavailable", None),
+    (True, "advertised", "artifact"),
+    (True, "verified", "undetermined"),
+    (True, "verified", None),
+])
+def test_format_two_publisher_checksum_rejects_impossible_state_tuples(
+        checksum_present, status, target):
+    release = _release(fixtures.build_capsule(), checksum=checksum_present)
+
+    with pytest.raises(ValueError, match="invalid publisher checksum state"):
+        fetch._publisher_checksum(release, status, target)
+
+
 def test_missing_and_ambiguous_releases_fail_instead_of_selecting_latest():
     _, releases = _records()
     with pytest.raises(ValueError, match="no BIOS release exactly matching"):

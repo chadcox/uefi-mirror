@@ -552,14 +552,21 @@ def _release_dict(release: Release) -> dict[str, object]:
 def _publisher_checksum(
     release: Release, status: str, target: str | None,
 ) -> dict[str, str]:
-    if release.publisher_sha256 is None:
+    expected = release.publisher_sha256
+    if expected is None:
+        if (status, target) != ("unavailable", None):
+            raise ValueError("invalid publisher checksum state")
         return {"status": "unavailable"}
-    if target is None or (status == "verified" and target not in {"artifact", "image"}):
-        raise ValueError("verified publisher checksum target must be artifact or image")
+    valid = (
+        (status, target) == ("advertised", "undetermined")
+        or (status == "verified" and target in {"artifact", "image"})
+    )
+    if not valid:
+        raise ValueError("invalid publisher checksum state")
     return {
         "status": status,
         "algorithm": "sha256",
-        "expected": release.publisher_sha256,
+        "expected": expected,
         "target": target,
     }
 
@@ -568,6 +575,10 @@ def resolution_document(
     selection: IdentitySelection, release: Release, identity_source: str,
     tool_version: str,
 ) -> dict[str, object]:
+    if release.publisher_sha256 is None:
+        checksum_status, checksum_target = "unavailable", None
+    else:
+        checksum_status, checksum_target = "advertised", "undetermined"
     return {
         "format_version": FETCH_FORMAT_VERSION,
         "operation": "resolve",
@@ -580,7 +591,7 @@ def resolution_document(
         "support_url": selection.product.support_url,
         "download_url": release.download_url,
         "publisher_checksum": _publisher_checksum(
-            release, "advertised", "undetermined"),
+            release, checksum_status, checksum_target),
     }
 
 
