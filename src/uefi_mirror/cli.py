@@ -230,11 +230,12 @@ def fetch(
         else:
             detected = platform.dmi()
             identity_source = "local"
-        selection = fetch_mod.resolve_identity(
+        request = fetch_mod.resolve_identity(
             detected, manufacturer=manufacturer, model=model, revision=revision,
             bios_version=bios_version)
         budget = fetch_mod.safety.HttpBudget()
-        releases = fetch_mod.fetch_releases(selection.product, budget)
+        product, releases = fetch_mod.fetch_releases(request, budget)
+        selection = fetch_mod.confirm_identity(request, product)
         release = fetch_mod.resolve_release(selection, releases)
         if resolve_only:
             result = fetch_mod.resolution_document(

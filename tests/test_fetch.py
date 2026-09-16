@@ -171,6 +171,13 @@ def _fetch_inputs():
     return image, artifact, json.dumps(metadata).encode()
 
 
+def _fetch_inputs_for_model(model: str):
+    image, artifact, metadata = _fetch_inputs()
+    document = json.loads(metadata)
+    document["Result"]["Model"] = model
+    return image, artifact, json.dumps(document).encode()
+
+
 def _fake_fetch_network(monkeypatch, artifact, metadata):
     calls = []
 
@@ -713,6 +720,62 @@ def test_fetch_cli_downloads_private_files_and_emits_clean_json(tmp_path, monkey
         assert (output / "fetch.json").stat().st_mode & 0o777 == 0o600
 
 
+def test_fetch_cli_supports_arbitrary_exact_asus_model_with_canonical_provenance(
+        tmp_path, monkeypatch):
+    canonical_model = "PRO WS X999-SYNTHETIC"
+    requested_model = canonical_model.casefold()
+    image, artifact, metadata = _fetch_inputs_for_model(canonical_model)
+    calls = _fake_fetch_network(monkeypatch, artifact, metadata)
+    monkeypatch.setattr(cli.platform, "dmi", lambda: {
+        **FETCH_DMI,
+        "board_name": requested_model,
+    })
+    output = tmp_path / "firmware"
+
+    result = RUNNER.invoke(cli.app, ["fetch", "--output", str(output), "--json"])
+
+    assert result.exit_code == 0, result.output
+    provenance = json.loads((output / "fetch.json").read_text())
+    assert provenance["selected_identity"]["model"] == canonical_model
+    assert (output / "BIOS.CAP").read_bytes() == image
+    assert [call[3] for call in calls] == ["ASUS metadata", "ASUS BIOS artifact"]
+    assert parse_qs(urlsplit(calls[0][0]).query)["model"] == [requested_model]
+
+
+def test_fetch_cli_rejects_metadata_echo_mismatch_before_artifact(
+        tmp_path, monkeypatch):
+    requested_model = "PRO WS X999-SYNTHETIC"
+    _image, artifact, metadata = _fetch_inputs_for_model("DIFFERENT MODEL")
+    calls = _fake_fetch_network(monkeypatch, artifact, metadata)
+    monkeypatch.setattr(cli.platform, "dmi", lambda: {
+        **FETCH_DMI,
+        "board_name": requested_model,
+    })
+    output = tmp_path / "firmware"
+
+    result = RUNNER.invoke(cli.app, ["fetch", "--output", str(output)])
+
+    assert result.exit_code == 1
+    assert "returned product 'DIFFERENT MODEL'" in result.output
+    assert [call[3] for call in calls] == ["ASUS metadata"]
+    assert not output.exists()
+
+
+def test_fetch_cli_rejects_non_asus_identity_before_network(monkeypatch):
+    monkeypatch.setattr(cli.platform, "dmi", lambda: {
+        **FETCH_DMI,
+        "sys_vendor": "Micro-Star International Co., Ltd.",
+        "board_vendor": "Micro-Star International Co., Ltd.",
+    })
+    monkeypatch.setattr(fetch.safety, "read_https", lambda *_args, **_kwargs: pytest.fail(
+        "network used for a non-ASUS identity"))
+
+    result = RUNNER.invoke(cli.app, ["fetch", "--resolve-only"])
+
+    assert result.exit_code == 1
+    assert "supports only ASUS" in result.output
+
+
 def test_fetched_image_flows_through_existing_schema_and_export(tmp_path, monkeypatch):
     _image, artifact, metadata = _fetch_inputs()
     calls = _fake_fetch_network(monkeypatch, artifact, metadata)
@@ -743,6 +806,10 @@ def test_resolve_only_json_does_not_download_or_write(tmp_path, monkeypatch):
     _image, artifact, metadata = _fetch_inputs()
     calls = _fake_fetch_network(monkeypatch, artifact, metadata)
     monkeypatch.setattr(cli.platform, "dmi", lambda: FETCH_DMI)
+    monkeypatch.setattr(cli, "_output_dir", lambda *_args: pytest.fail(
+        "resolve-only created an output directory"))
+    monkeypatch.setattr(cli, "_write_output", lambda *_args: pytest.fail(
+        "resolve-only wrote output"))
 
     result = RUNNER.invoke(cli.app, ["fetch", "--resolve-only", "--json"])
 
@@ -822,7 +889,7 @@ def test_fetch_accepts_complete_explicit_target_without_dmi(monkeypatch):
     assert len(calls) == 1
 
 
-def test_fetch_refuses_nonempty_output_before_network(tmp_path, monkeypatch):
+def test_fetch_cli_refuses_nonempty_output_before_network(tmp_path, monkeypatch):
     output = tmp_path / "firmware"
     output.mkdir()
     sentinel = output / "keep"
@@ -836,7 +903,8 @@ def test_fetch_refuses_nonempty_output_before_network(tmp_path, monkeypatch):
     assert sentinel.read_text() == "unchanged"
 
 
-def test_fetch_refuses_symlinked_or_reparse_output_before_network(tmp_path, monkeypatch):
+def test_fetch_cli_refuses_symlinked_or_reparse_output_before_network(
+        tmp_path, monkeypatch):
     target = tmp_path / "target"
     target.mkdir()
     link = tmp_path / "firmware"
@@ -854,7 +922,8 @@ def test_fetch_refuses_symlinked_or_reparse_output_before_network(tmp_path, monk
     assert list(target.iterdir()) == []
 
 
-def test_fetch_reports_partial_output_when_manifest_write_fails(tmp_path, monkeypatch):
+def test_fetch_cli_reports_partial_output_when_manifest_write_fails(
+        tmp_path, monkeypatch):
     image, artifact, metadata = _fetch_inputs()
     _fake_fetch_network(monkeypatch, artifact, metadata)
     monkeypatch.setattr(cli.platform, "dmi", lambda: FETCH_DMI)
