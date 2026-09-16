@@ -71,7 +71,6 @@ class Release:
     beta: bool
     download_url: str
     publisher_sha256: str | None
-    publisher_checksum_target: str = "artifact"
 
 
 @dataclass(frozen=True)
@@ -104,6 +103,7 @@ class ValidatedImage:
     artifact_size: int
     artifact_sha256: str
     publisher_checksum_status: str
+    publisher_checksum_target: str | None
     capsule: cap.Capsule
     settings_count: int
     parser_warnings: tuple[str, ...]
@@ -467,27 +467,22 @@ def _zip_image(data: bytes) -> tuple[str, bytes]:
         raise ValueError(f"invalid or unsupported ZIP artifact: {exc}") from exc
 
 
-def _check_publisher_checksum(release: Release, data: bytes, target: str) -> str:
-    expected = release.publisher_sha256
-    if expected is None:
-        return "unavailable"
+def _publisher_checksum_matches(expected: str, data: bytes) -> bool:
     if (not isinstance(expected, str) or len(expected) != 64
-            or any(char not in "0123456789abcdefABCDEF" for char in expected)):
+            or any(char not in _HEX_DIGITS for char in expected)):
         raise ValueError("publisher SHA-256 is malformed")
-    if release.publisher_checksum_target not in ("artifact", "image"):
-        raise ValueError("publisher SHA-256 has an unsupported target")
-    if release.publisher_checksum_target == target:
-        actual = hashlib.sha256(data).hexdigest()
-        if not hmac.compare_digest(actual, expected.casefold()):
-            raise ValueError(f"publisher SHA-256 mismatch for {target}")
-        return "verified"
-    return "pending"
+    actual = hashlib.sha256(data).hexdigest()
+    return hmac.compare_digest(actual, expected.casefold())
 
 
 def validate_artifact(release: Release, artifact: safety.HttpResult) -> ValidatedImage:
     """Verify and parse a downloaded direct image or ZIP entirely in memory."""
     artifact_sha256 = hashlib.sha256(artifact.data).hexdigest()
-    checksum_status = _check_publisher_checksum(release, artifact.data, "artifact")
+    expected = release.publisher_sha256
+    artifact_matches = (
+        expected is not None
+        and _publisher_checksum_matches(expected, artifact.data)
+    )
     artifact_name = _url_filename(artifact.final_url)
     suffix = _image_suffix(artifact_name)
     if artifact.data.lstrip()[:32].lower().startswith((b"<!doctype html", b"<html")):
@@ -499,9 +494,17 @@ def validate_artifact(release: Release, artifact: safety.HttpResult) -> Validate
     else:
         raise ValueError(f"unsupported BIOS artifact container: {artifact_name!r}")
 
-    image_status = _check_publisher_checksum(release, image_data, "image")
-    if image_status == "verified":
-        checksum_status = image_status
+    if expected is None:
+        checksum_status = "unavailable"
+        checksum_target = None
+    elif artifact_matches:
+        checksum_status = "verified"
+        checksum_target = "artifact"
+    elif _publisher_checksum_matches(expected, image_data):
+        checksum_status = "verified"
+        checksum_target = "image"
+    else:
+        raise ValueError("publisher SHA-256 mismatch for artifact and image")
     try:
         capsule = cap.parse(image_data, image_name)
         schema = builder.build(
@@ -518,6 +521,7 @@ def validate_artifact(release: Release, artifact: safety.HttpResult) -> Validate
         artifact_size=len(artifact.data),
         artifact_sha256=artifact_sha256,
         publisher_checksum_status=checksum_status,
+        publisher_checksum_target=checksum_target,
         capsule=capsule,
         settings_count=len(schema.settings),
         parser_warnings=tuple(schema.warnings),
@@ -544,15 +548,18 @@ def _release_dict(release: Release) -> dict[str, object]:
     }
 
 
-def _publisher_checksum(release: Release, status: str) -> dict[str, str]:
+def _publisher_checksum(
+        release: Release, status: str, target: str | None = None) -> dict[str, str]:
     if release.publisher_sha256 is None:
         return {"status": "unavailable"}
-    return {
+    result = {
         "status": status,
         "algorithm": "sha256",
         "expected": release.publisher_sha256,
-        "target": release.publisher_checksum_target,
     }
+    if target is not None:
+        result["target"] = target
+    return result
 
 
 def resolution_document(
@@ -604,7 +611,8 @@ def provenance_document(
             "sha256": image.artifact_sha256,
         },
         "publisher_checksum": _publisher_checksum(
-            release, image.publisher_checksum_status),
+            release, image.publisher_checksum_status,
+            image.publisher_checksum_target),
         "image": {
             "filename": image.image_name,
             "size": len(image.image_data),

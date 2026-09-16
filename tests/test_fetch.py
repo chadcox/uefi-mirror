@@ -147,10 +147,10 @@ def _artifact(data: bytes, name: str) -> fetch.safety.HttpResult:
     return fetch.safety.HttpResult(data, f"https://dlcdnets.asus.com/files/{name}")
 
 
-def _release(data: bytes, *, checksum=True, target="artifact") -> fetch.Release:
+def _release(data: bytes, *, checksum=True) -> fetch.Release:
     release = _records()[1][0]
     digest = hashlib.sha256(data).hexdigest() if checksum else None
-    return replace(release, publisher_sha256=digest, publisher_checksum_target=target)
+    return replace(release, publisher_sha256=digest)
 
 
 def _patch_zip_field(data: bytes, signature: bytes, offset: int, value: int) -> bytes:
@@ -286,7 +286,6 @@ def test_exact_older_and_beta_releases_are_selected_from_offline_metadata():
         "ROG-STRIX-X870E-E-GAMING-WIFI-ASUS-1701.zip"
     )
     assert beta.beta is True
-    assert beta.publisher_checksum_target == "artifact"
     assert beta.publisher_sha256 == (
         "d26c830a48def3bbb741aba75e1563b76b712f92b609f13f2bdb1079159d17d5"
     )
@@ -460,6 +459,7 @@ def test_direct_image_is_checksum_verified_and_parser_validated():
     assert result.artifact_size == len(image)
     assert result.artifact_sha256 == hashlib.sha256(image).hexdigest()
     assert result.publisher_checksum_status == "verified"
+    assert result.publisher_checksum_target == "artifact"
     assert result.capsule.data == fixtures.build_image()
     assert result.settings_count == 1
 
@@ -477,6 +477,7 @@ def test_zip_selects_one_safe_nested_image_and_ignores_tools():
     assert result.image_name == "BIOS.CAP"
     assert result.image_data == image
     assert result.publisher_checksum_status == "verified"
+    assert result.publisher_checksum_target == "artifact"
     assert result.settings_count == 1
 
 
@@ -484,27 +485,40 @@ def test_image_scoped_and_missing_publisher_checksums_are_distinct():
     image = fixtures.build_capsule()
     artifact = _zip(("BIOS.CAP", image))
     image_scoped = replace(
-        _release(artifact), publisher_sha256=hashlib.sha256(image).hexdigest(),
-        publisher_checksum_target="image")
+        _release(artifact), publisher_sha256=hashlib.sha256(image).hexdigest())
 
     verified = fetch.validate_artifact(image_scoped, _artifact(artifact, "update.zip"))
     unavailable = fetch.validate_artifact(
         _release(image, checksum=False), _artifact(image, "BIOS.CAP"))
 
     assert verified.publisher_checksum_status == "verified"
+    assert verified.publisher_checksum_target == "image"
     assert unavailable.publisher_checksum_status == "unavailable"
+    assert unavailable.publisher_checksum_target is None
 
 
-@pytest.mark.parametrize("checksum,target,match", [
-    ("0" * 64, "artifact", "mismatch"),
-    ("bad", "artifact", "malformed"),
-    ("0" * 64, "unknown", "unsupported target"),
-])
-def test_bad_publisher_checksum_fails_before_image_parsing(checksum, target, match):
-    release = replace(
-        _records()[1][0], publisher_sha256=checksum,
-        publisher_checksum_target=target)
-    with pytest.raises(ValueError, match=match):
+def test_publisher_checksum_matching_neither_scope_fails_before_image_parsing(
+        monkeypatch):
+    image = fixtures.build_capsule()
+    artifact = _zip(("BIOS.CAP", image))
+    release = replace(_release(artifact), publisher_sha256="0" * 64)
+    monkeypatch.setattr(
+        fetch.cap, "parse",
+        lambda *_args: pytest.fail("firmware parser called before checksum rejection"))
+
+    with pytest.raises(ValueError) as exc:
+        fetch.validate_artifact(release, _artifact(artifact, "update.zip"))
+
+    assert str(exc.value) == "publisher SHA-256 mismatch for artifact and image"
+
+
+def test_malformed_publisher_checksum_fails_before_image_parsing(monkeypatch):
+    release = replace(_records()[1][0], publisher_sha256="bad")
+    monkeypatch.setattr(
+        fetch.cap, "parse",
+        lambda *_args: pytest.fail("firmware parser called before checksum rejection"))
+
+    with pytest.raises(ValueError, match="publisher SHA-256 is malformed"):
         fetch.validate_artifact(release, _artifact(b"not firmware", "BIOS.CAP"))
 
 
@@ -519,11 +533,12 @@ def test_bad_publisher_checksum_fails_before_image_parsing(checksum, target, mat
     "BIOS.CAP:stream",
     "BIOS\x7f.CAP",
 ])
-def test_zip_rejects_unsafe_image_paths(name):
-    artifact = _zip((name, fixtures.build_capsule()))
+def test_image_scoped_checksum_does_not_bypass_unsafe_zip_paths(name):
+    image = fixtures.build_capsule()
+    artifact = _zip((name, image))
     with pytest.raises(ValueError, match="unsafe"):
         fetch.validate_artifact(
-            _release(artifact), _artifact(artifact, "update.zip"))
+            _release(image), _artifact(artifact, "update.zip"))
 
 
 def test_zip_rejects_unsafe_unrelated_paths_and_duplicate_names():
@@ -575,18 +590,21 @@ def test_zip_enforces_entry_and_advertised_size_limits():
         fetch.validate_artifact(
             _release(too_many), _artifact(too_many, "update.zip"))
 
-    oversized = _zip(("BIOS.CAP", b"x"))
+    oversized_image = b"x"
+    oversized = _zip(("BIOS.CAP", oversized_image))
     oversized = _patch_zip_field(
         oversized, b"PK\x01\x02", 24, fetch.cap.MAX_IMAGE_BYTES + 1)
     with pytest.raises(ValueError, match="firmware image exceeds"):
         fetch.validate_artifact(
-            _release(oversized), _artifact(oversized, "update.zip"))
+            _release(oversized_image), _artifact(oversized, "update.zip"))
 
-    huge = _zip(("BIOS.CAP", b"x"))
+    huge_image = b"x"
+    huge = _zip(("BIOS.CAP", huge_image))
     huge = _patch_zip_field(
         huge, b"PK\x01\x02", 24, fetch.MAX_ZIP_UNCOMPRESSED + 1)
     with pytest.raises(ValueError, match="uncompressed limit"):
-        fetch.validate_artifact(_release(huge), _artifact(huge, "update.zip"))
+        fetch.validate_artifact(
+            _release(huge_image), _artifact(huge, "update.zip"))
 
 
 def test_zip_rejects_unsupported_compression_and_crc_corruption():
