@@ -927,6 +927,30 @@ def test_format_one_checksum_serializers_preserve_target_shape():
         }
 
 
+def test_format_one_provenance_hides_discovered_image_checksum_target():
+    image = fixtures.build_capsule()
+    archive = _zip(("BIOS.CAP", image))
+    artifact = _artifact(archive, "update.zip")
+    request = fetch.resolve_identity(FETCH_DMI, bios_version="2401")
+    selection = fetch.confirm_identity(request, _product())
+    release = replace(
+        _release(archive), version="2401",
+        publisher_sha256=hashlib.sha256(image).hexdigest())
+    validated = fetch.validate_artifact(release, artifact)
+
+    provenance = fetch.provenance_document(
+        selection, release, artifact, validated, "local", "1.0.0",
+        "2026-09-10T00:00:00Z")
+
+    assert validated.publisher_checksum_target == "image"
+    assert provenance["publisher_checksum"] == {
+        "status": "verified",
+        "algorithm": "sha256",
+        "expected": release.publisher_sha256,
+        "target": "artifact",
+    }
+
+
 def test_missing_and_ambiguous_releases_fail_instead_of_selecting_latest():
     _, releases = _records()
     with pytest.raises(ValueError, match="no BIOS release exactly matching"):

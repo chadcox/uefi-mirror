@@ -549,15 +549,14 @@ def _release_dict(release: Release) -> dict[str, object]:
     }
 
 
-def _publisher_checksum(
-        release: Release, status: str, target: str) -> dict[str, str]:
+def _publisher_checksum(release: Release, status: str) -> dict[str, str]:
     if release.publisher_sha256 is None:
         return {"status": "unavailable"}
     return {
         "status": status,
         "algorithm": "sha256",
         "expected": release.publisher_sha256,
-        "target": target,
+        "target": "artifact",
     }
 
 
@@ -576,8 +575,7 @@ def resolution_document(
         "release": _release_dict(release),
         "support_url": selection.product.support_url,
         "download_url": release.download_url,
-        "publisher_checksum": _publisher_checksum(
-            release, "advertised", "artifact"),
+        "publisher_checksum": _publisher_checksum(release, "advertised"),
     }
 
 
@@ -611,8 +609,7 @@ def provenance_document(
             "sha256": image.artifact_sha256,
         },
         "publisher_checksum": _publisher_checksum(
-            release, image.publisher_checksum_status,
-            image.publisher_checksum_target),
+            release, image.publisher_checksum_status),
         "image": {
             "filename": image.image_name,
             "size": len(image.image_data),
