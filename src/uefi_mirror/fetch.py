@@ -477,12 +477,6 @@ def _publisher_checksum_matches(expected: str, data: bytes) -> bool:
 
 def validate_artifact(release: Release, artifact: safety.HttpResult) -> ValidatedImage:
     """Verify and parse a downloaded direct image or ZIP entirely in memory."""
-    artifact_sha256 = hashlib.sha256(artifact.data).hexdigest()
-    expected = release.publisher_sha256
-    artifact_matches = (
-        expected is not None
-        and _publisher_checksum_matches(expected, artifact.data)
-    )
     artifact_name = _url_filename(artifact.final_url)
     suffix = _image_suffix(artifact_name)
     if artifact.data.lstrip()[:32].lower().startswith((b"<!doctype html", b"<html")):
@@ -493,6 +487,13 @@ def validate_artifact(release: Release, artifact: safety.HttpResult) -> Validate
         image_name, image_data = artifact_name, artifact.data
     else:
         raise ValueError(f"unsupported BIOS artifact container: {artifact_name!r}")
+
+    artifact_sha256 = hashlib.sha256(artifact.data).hexdigest()
+    expected = release.publisher_sha256
+    artifact_matches = (
+        expected is not None
+        and _publisher_checksum_matches(expected, artifact.data)
+    )
 
     if expected is None:
         checksum_status = "unavailable"
@@ -549,17 +550,15 @@ def _release_dict(release: Release) -> dict[str, object]:
 
 
 def _publisher_checksum(
-        release: Release, status: str, target: str | None = None) -> dict[str, str]:
+        release: Release, status: str, target: str) -> dict[str, str]:
     if release.publisher_sha256 is None:
         return {"status": "unavailable"}
-    result = {
+    return {
         "status": status,
         "algorithm": "sha256",
         "expected": release.publisher_sha256,
+        "target": target,
     }
-    if target is not None:
-        result["target"] = target
-    return result
 
 
 def resolution_document(
@@ -577,7 +576,8 @@ def resolution_document(
         "release": _release_dict(release),
         "support_url": selection.product.support_url,
         "download_url": release.download_url,
-        "publisher_checksum": _publisher_checksum(release, "advertised"),
+        "publisher_checksum": _publisher_checksum(
+            release, "advertised", "artifact"),
     }
 
 

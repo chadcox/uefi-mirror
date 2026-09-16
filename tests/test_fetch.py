@@ -522,6 +522,36 @@ def test_malformed_publisher_checksum_fails_before_image_parsing(monkeypatch):
         fetch.validate_artifact(release, _artifact(b"not firmware", "BIOS.CAP"))
 
 
+@pytest.mark.parametrize(("name", "data", "match"), [
+    ("BIOS.CAP", b"<!doctype html><html>error</html>", "HTML"),
+    ("update.exe", b"MZ", "unsupported BIOS artifact container"),
+])
+def test_outer_container_validation_precedes_checksum_resolution(
+        name, data, match):
+    release = replace(_release(data, checksum=False), publisher_sha256="bad")
+
+    with pytest.raises(ValueError, match=match):
+        fetch.validate_artifact(release, _artifact(data, name))
+
+
+@pytest.mark.parametrize(("case", "match"), [
+    ("unsafe", "unsafe"),
+    ("oversized", "firmware image exceeds"),
+])
+def test_bounded_zip_validation_precedes_checksum_resolution(case, match):
+    image = fixtures.build_capsule()
+    if case == "unsafe":
+        artifact = _zip(("../BIOS.CAP", image))
+    else:
+        artifact = _zip(("BIOS.CAP", image))
+        artifact = _patch_zip_field(
+            artifact, b"PK\x01\x02", 24, fetch.cap.MAX_IMAGE_BYTES + 1)
+    release = replace(_release(image, checksum=False), publisher_sha256="bad")
+
+    with pytest.raises(ValueError, match=match):
+        fetch.validate_artifact(release, _artifact(artifact, "update.zip"))
+
+
 @pytest.mark.parametrize("name", [
     "../BIOS.CAP",
     "/absolute/BIOS.CAP",
@@ -869,6 +899,32 @@ def test_provenance_warns_when_override_differs_from_detected_version():
         "2026-09-10T00:00:00Z")
     assert missing["publisher_checksum"] == {"status": "unavailable"}
     assert "Publisher SHA-256 was unavailable." in missing["warnings"]
+
+
+def test_format_one_checksum_serializers_preserve_target_shape():
+    image = fixtures.build_capsule()
+    artifact = _artifact(image, "BIOS.CAP")
+    request = fetch.resolve_identity(FETCH_DMI, bios_version="2401")
+    selection = fetch.confirm_identity(request, _product())
+    release = replace(_release(image), version="2401")
+    validated = fetch.validate_artifact(release, artifact)
+
+    provenance = fetch.provenance_document(
+        selection, release, artifact, validated, "local", "1.0.0",
+        "2026-09-10T00:00:00Z")
+    assert provenance["publisher_checksum"] == {
+        "status": "verified",
+        "algorithm": "sha256",
+        "expected": release.publisher_sha256,
+        "target": "artifact",
+    }
+    assert fetch.resolution_document(
+        selection, release, "local", "1.0.0")["publisher_checksum"] == {
+            "status": "advertised",
+            "algorithm": "sha256",
+            "expected": release.publisher_sha256,
+            "target": "artifact",
+        }
 
 
 def test_missing_and_ambiguous_releases_fail_instead_of_selecting_latest():
