@@ -50,6 +50,37 @@ are covered by the repository or the recorded reference-system validation.
   `ae633a16f92774ab130203417b770f12fab48f0ea4a9be357f0137ff9205a825`;
   its 33,558,528-byte CAP produced 5,376 settings. Installed-firmware identity
   remained `unverified`, and neither artifact nor host data was committed.
+
+- [x] On 2026-09-15, `pytest -q tests/test_fetch.py` passed all 127 tests, and
+  live format-2 resolve/download verification against official ASUS endpoints
+  completed for four of the five representative exact releases. Each successful
+  resolve returned operation `resolve`, the canonical requested model/version,
+  an advertised SHA-256 with target `undetermined`, and official download host
+  `dlcdnets.asus.com`. Each successful download saved a `0600` CAP and
+  `fetch.json`, verified the publisher checksum against the artifact, reported
+  checksum target `artifact`, found settings, and left installed-firmware
+  identity `unverified`.
+
+  | Model | Version | Release date | Artifact bytes | Artifact SHA-256 | Image bytes | Image file SHA-256 | Image payload SHA-256 | Settings | DMI status |
+  | --- | ---: | --- | ---: | --- | ---: | --- | --- | ---: | --- |
+  | ROG STRIX X870E-E GAMING WIFI | 2402 | 2026/07/15 | 19,203,110 | `ae633a16f92774ab130203417b770f12fab48f0ea4a9be357f0137ff9205a825` | 33,558,528 | `73fc809520172630bc2132a7f4e8e4242f25e6c3095fff6641e8688d041d4204` | `4140e3d5c644dafc5c08fe5cb91067f45f18fcb5237575b298723a3d7c9bca1e` | 5,376 | Override fetch: `unverified`; no-override smoke blocked as recorded below |
+  | ROG STRIX B650E-F GAMING WIFI | 3881 | 2026/06/29 | 18,069,780 | `a207d283c9be39e3d2341023b580dada9da97dd94958fe77d0d2e5da70eb1129` | 33,558,528 | `309294a1b204a1e3717e768d2debddbd72c03d0ca6254ab41049d0b884a6bd4f` | `bae3945f94ca047475c3597f31f0358a9eb5e0bddd45fbded1648a62c0f3df88` | 5,023 | Override-only; `unverified` |
+  | TUF GAMING X870-PLUS WIFI | 1681 | 2026/06/22 | 19,044,618 | `296192d08798f4f206dea137c02dc5d56047319e3ddd1ddb818d6d0c1770ba18` | 33,558,528 | `86bb62765e8441f40c274449189e24ffbaf30d0c518af50cb4bbd64f5f54e291` | `1d6d8d0b5c75cbe5b954e99f8eef219cd7f53133ea32d47f87afbcf9d8636dae` | 5,335 | Override-only; `unverified` |
+  | ROG STRIX Z790-E GAMING WIFI | 3202 | 2026/08/17 | 13,632,016 | `e4b9c52218cdaddd8d6a571a4ad59ac85f999869574960ca496d99e073972f0a` | 33,558,528 | `3ddfeb13592e9d7ea291eb004d5c370a86f86f5ae654ad81af5f457685215c7e` | `04184885fcebf15436b238766b5876ad2ced5d0b40730416ca1fb702243efb90` | 5,806 | Override-only; `unverified` |
+
+- [ ] PRIME X570-P 5044 live resolve and download are blocked before release
+  selection by another official metadata record: `ASUS BIOS 3603 has an
+  unexpected download path`. The official 5044 record itself still advertises
+  release date 2026/01/27, path
+  `/pub/ASUS/mb/BIOS/PRIME-X570-P-ASUS-5044.zip`, and SHA-256
+  `34636092e7159776d5a5e93eeb43f66280823ffb8c11b1e157e5b6a8a369905`;
+  no artifact/image hashes, sizes, checksum target, settings count, or download
+  validation status were produced.
+- [ ] The no-override physical DMI smoke remains blocked. The host reports the
+  reference `ROG STRIX X870E-E GAMING WIFI` board and installed BIOS 2402, but
+  automatic resolution exits with `automatic motherboard identity is ambiguous
+  because system vendor 'CyberPowerPC' differs from board vendor 'ASUS'; pass
+  --manufacturer, --model, and --bios-version`.
 - [x] Fetch tests are offline and included in the existing Linux/Windows,
   Python 3.12/3.13 CI matrix.
 
