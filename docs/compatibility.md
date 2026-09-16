@@ -19,16 +19,33 @@ Schema JSON, snapshot manifests, export JSON, and fetch documents carry their ow
 - A saved schema must decode and evaluate visibility identically after a
   serialize/reload round trip with the same tool version.
 
-Snapshot and fetch formats are 1; schema/export format is 3. Snapshots and
-exports can contain machine identifiers or boot paths and should be treated as
-private. Fetch provenance contains selected and available DMI identity plus
-source URLs and hashes, but no raw firmware variables. Schema JSON contains
-firmware definitions but no collected values.
+Snapshot format is 1, schema/export format is 3, and fetch format is 2.
+Snapshots and exports can contain machine identifiers or boot paths and should
+be treated as private. Fetch provenance contains selected and available DMI
+identity plus source URLs and hashes, but no raw firmware variables. Schema JSON
+contains firmware definitions but no collected values.
+
+Fetch format 2 publishes the scope established by checksum validation:
+
+- A resolve document with an advertised hash records `status: "advertised"`,
+  `algorithm: "sha256"`, the hash as `expected`, and `target: "undetermined"`;
+  without an advertised hash it records only `status: "unavailable"`.
+- Download provenance with a verified hash records `status: "verified"`,
+  `algorithm: "sha256"`, the hash as `expected`, and the validated `target` of
+  either `"artifact"` or `"image"`; without an advertised hash it records only
+  `status: "unavailable"`. A downloaded verified checksum never has an
+  `"undetermined"` target.
+
+Fetch format 1 is historical. It recorded `target: "artifact"` whenever a hash
+was present, including resolve documents where no bytes had been downloaded and
+downloads where validation discovered that the hash covered the extracted
+image. Format 2 removes that ambiguity; snapshot, schema, and export formats are
+unchanged.
 
 `fetch.json` is an audit record, not a trusted input to another command.
 Existing commands parse the image path supplied by the user and do not load the
 manifest. A successful `fetch --json` wrapper has `operation: "fetch"`, saved
-paths, and its format-1 provenance; `fetch --resolve-only --json` has
+paths, and its format-2 provenance; `fetch --resolve-only --json` has
 `operation: "resolve"` and selection metadata but no saved paths or computed
 artifact/image hashes. Neither shape claims the downloaded image is the
 installed firmware release.

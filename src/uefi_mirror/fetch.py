@@ -24,7 +24,7 @@ ASUS_METADATA_HOSTS = frozenset({"www.asus.com"})
 ASUS_ARTIFACT_HOSTS = frozenset({"dlcdnets.asus.com"})
 MAX_ZIP_ENTRIES = 128
 MAX_ZIP_UNCOMPRESSED = 256 << 20
-FETCH_FORMAT_VERSION = 1
+FETCH_FORMAT_VERSION = 2
 _IMAGE_SUFFIXES = frozenset({".cap", ".rom", ".bin", ".fd"})
 _ZIP_COMPRESSION = frozenset({zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED})
 _HEX_DIGITS = "0123456789abcdefABCDEF"
@@ -549,14 +549,18 @@ def _release_dict(release: Release) -> dict[str, object]:
     }
 
 
-def _publisher_checksum(release: Release, status: str) -> dict[str, str]:
+def _publisher_checksum(
+    release: Release, status: str, target: str | None,
+) -> dict[str, str]:
     if release.publisher_sha256 is None:
         return {"status": "unavailable"}
+    if target is None or (status == "verified" and target not in {"artifact", "image"}):
+        raise ValueError("verified publisher checksum target must be artifact or image")
     return {
         "status": status,
         "algorithm": "sha256",
         "expected": release.publisher_sha256,
-        "target": "artifact",
+        "target": target,
     }
 
 
@@ -575,7 +579,8 @@ def resolution_document(
         "release": _release_dict(release),
         "support_url": selection.product.support_url,
         "download_url": release.download_url,
-        "publisher_checksum": _publisher_checksum(release, "advertised"),
+        "publisher_checksum": _publisher_checksum(
+            release, "advertised", "undetermined"),
     }
 
 
@@ -609,7 +614,8 @@ def provenance_document(
             "sha256": image.artifact_sha256,
         },
         "publisher_checksum": _publisher_checksum(
-            release, image.publisher_checksum_status),
+            release, image.publisher_checksum_status,
+            image.publisher_checksum_target),
         "image": {
             "filename": image.image_name,
             "size": len(image.image_data),

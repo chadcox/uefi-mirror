@@ -693,7 +693,7 @@ def test_fetch_cli_downloads_private_files_and_emits_clean_json(tmp_path, monkey
     assert sorted(path.name for path in output.iterdir()) == ["BIOS.CAP", "fetch.json"]
     assert (output / "BIOS.CAP").read_bytes() == image
     assert wrapper == {
-        "format_version": 1,
+        "format_version": 2,
         "operation": "fetch",
         "image_path": str(output / "BIOS.CAP"),
         "manifest_path": str(output / "fetch.json"),
@@ -970,54 +970,73 @@ def test_provenance_warns_when_override_differs_from_detected_version():
     assert "Publisher SHA-256 was unavailable." in missing["warnings"]
 
 
-def test_format_one_checksum_serializers_preserve_target_shape():
+def test_format_two_resolution_document_checksum_contract():
+    image = fixtures.build_capsule()
+    request = fetch.resolve_identity(FETCH_DMI, bios_version="2401")
+    selection = fetch.confirm_identity(request, _product())
+    release = replace(_release(image), version="2401")
+
+    advertised = fetch.resolution_document(
+        selection, release, "local", "1.0.0")
+    unavailable = fetch.resolution_document(
+        selection, replace(release, publisher_sha256=None), "local", "1.0.0")
+
+    assert advertised["publisher_checksum"] == {
+        "status": "advertised",
+        "algorithm": "sha256",
+        "expected": release.publisher_sha256,
+        "target": "undetermined",
+    }
+    assert advertised["format_version"] == 2
+    assert unavailable["publisher_checksum"] == {"status": "unavailable"}
+
+
+@pytest.mark.parametrize("target", ["artifact", "image"])
+def test_format_two_provenance_checksum_contract_uses_validated_target(target):
+    image = fixtures.build_capsule()
+    artifact_data = image if target == "artifact" else _zip(("BIOS.CAP", image))
+    artifact_name = "BIOS.CAP" if target == "artifact" else "update.zip"
+    artifact = _artifact(artifact_data, artifact_name)
+    request = fetch.resolve_identity(FETCH_DMI, bios_version="2401")
+    selection = fetch.confirm_identity(request, _product())
+    release = replace(
+        _release(artifact_data),
+        version="2401",
+        publisher_sha256=hashlib.sha256(
+            artifact_data if target == "artifact" else image).hexdigest(),
+    )
+    validated = fetch.validate_artifact(release, artifact)
+
+    provenance = fetch.provenance_document(
+        selection, release, artifact, validated, "local", "1.0.0",
+        "2026-09-10T00:00:00Z")
+    checksum = provenance["publisher_checksum"]
+
+    assert validated.publisher_checksum_target == target
+    assert checksum == {
+        "status": "verified",
+        "algorithm": "sha256",
+        "expected": release.publisher_sha256,
+        "target": target,
+    }
+    assert provenance["format_version"] == 2
+    assert checksum["target"] != "undetermined"
+
+
+def test_format_two_provenance_unavailable_checksum_contract():
     image = fixtures.build_capsule()
     artifact = _artifact(image, "BIOS.CAP")
     request = fetch.resolve_identity(FETCH_DMI, bios_version="2401")
     selection = fetch.confirm_identity(request, _product())
-    release = replace(_release(image), version="2401")
-    validated = fetch.validate_artifact(release, artifact)
-
-    provenance = fetch.provenance_document(
-        selection, release, artifact, validated, "local", "1.0.0",
-        "2026-09-10T00:00:00Z")
-    assert provenance["publisher_checksum"] == {
-        "status": "verified",
-        "algorithm": "sha256",
-        "expected": release.publisher_sha256,
-        "target": "artifact",
-    }
-    assert fetch.resolution_document(
-        selection, release, "local", "1.0.0")["publisher_checksum"] == {
-            "status": "advertised",
-            "algorithm": "sha256",
-            "expected": release.publisher_sha256,
-            "target": "artifact",
-        }
-
-
-def test_format_one_provenance_hides_discovered_image_checksum_target():
-    image = fixtures.build_capsule()
-    archive = _zip(("BIOS.CAP", image))
-    artifact = _artifact(archive, "update.zip")
-    request = fetch.resolve_identity(FETCH_DMI, bios_version="2401")
-    selection = fetch.confirm_identity(request, _product())
-    release = replace(
-        _release(archive), version="2401",
-        publisher_sha256=hashlib.sha256(image).hexdigest())
+    release = replace(_release(image, checksum=False), version="2401")
     validated = fetch.validate_artifact(release, artifact)
 
     provenance = fetch.provenance_document(
         selection, release, artifact, validated, "local", "1.0.0",
         "2026-09-10T00:00:00Z")
 
-    assert validated.publisher_checksum_target == "image"
-    assert provenance["publisher_checksum"] == {
-        "status": "verified",
-        "algorithm": "sha256",
-        "expected": release.publisher_sha256,
-        "target": "artifact",
-    }
+    assert provenance["format_version"] == 2
+    assert provenance["publisher_checksum"] == {"status": "unavailable"}
 
 
 def test_missing_and_ambiguous_releases_fail_instead_of_selecting_latest():
