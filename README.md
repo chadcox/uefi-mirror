@@ -110,23 +110,28 @@ rerun live commands from an elevated Administrator terminal when it does.
 
 ### 2. Obtain the matching firmware image
 
-For the ASUS ROG Strix X870E-E Gaming WiFi, `fetch` can resolve the exact
-installed release from ASUS and save a validated image plus `fetch.json`:
+`fetch` provides capability-based support for exact ASUS retail-motherboard
+models exposed by the reviewed endpoint. It can resolve an exact installed
+release and save a validated image plus `fetch.json`:
 
 ```console
-$ uefi-mirror fetch --output firmware/
+$ uefi-mirror fetch --manufacturer ASUS \
+    --model "ROG STRIX X870E-E GAMING WIFI" --bios-version 2402 \
+    --output firmware/
 Fetched 2402 to firmware/ROG-STRIX-X870E-E-GAMING-WIFI-ASUS-2402.CAP
 Provenance written to firmware/fetch.json
 ```
 
-This is an explicit network operation. It supports exactly that retail ASUS
-model today; OEM/prebuilt ambiguity, missing identity, and unsupported models
-fail with instructions for explicit options or the manual workflow. To inspect
-the selected release without downloading it or writing files, use
-`uefi-mirror fetch --resolve-only --json` (this still contacts ASUS).
+This is an explicit network operation. With unambiguous ASUS retail-board DMI,
+the three identity options may be omitted. If local DMI differs from ASUS's
+exact marketing name or is ambiguous, pass `--manufacturer`, `--model`, and
+`--bios-version` only after independently confirming the retail model and exact
+installed release. To inspect the selection without downloading or writing
+files, use `uefi-mirror fetch --resolve-only --json` (this still contacts ASUS).
 
-For other boards, download the BIOS update for the exact motherboard model,
-revision, and installed firmware version from the motherboard or system vendor.
+When automatic retrieval fails, and for other vendors, download the BIOS update
+for the exact motherboard model, revision, and installed firmware version from
+the motherboard or system vendor.
 Extract the archive and pass its `.CAP`, `.ROM`, `.BIN`, or vendor-named raw
 image to `uefi-mirror`. The extension does not matter; capsule-wrapped updates
 and raw SPI images are detected from their contents.
@@ -245,7 +250,7 @@ given one and against the schema's own declarations when given `--schema`.
 
 ## Command reference
 
-### `fetch` — retrieve one supported official image
+### `fetch` — retrieve an exact official image
 
 ```console
 $ uefi-mirror fetch --manufacturer ASUS \
@@ -253,13 +258,20 @@ $ uefi-mirror fetch --manufacturer ASUS \
     --output firmware/
 ```
 
-`fetch` is the only networked command. It resolves one exact release from a
-reviewed official product mapping, verifies the publisher's SHA-256 when
-available, accepts a direct image or bounded ZIP, and requires the existing
-parser to find settings before writing. It never flashes firmware, executes
-vendor tools, or collects UEFI variables. Use `--snapshot` to resolve from a
-validated snapshot's DMI identity; local DMI is never substituted when that
-snapshot lacks identity.
+`fetch` is the only networked command. It has capability-based support for
+exact ASUS retail-motherboard models exposed by the reviewed endpoint. It fails
+closed unless the request identifies ASUS without OEM/prebuilt ambiguity, the
+endpoint normalized-exactly echoes the requested model, and the exact requested
+version exists (there is no fallback to latest). The returned release must also
+use the reviewed download path and host, have a supported direct-image or
+bounded-ZIP container with exactly one safe firmware image, match an advertised
+publisher SHA-256 against the discovered `artifact` or `image` target, and
+produce at least one setting when parsed. Firmware parsing occurs only after
+advertised checksum verification.
+
+It never flashes firmware, executes vendor tools, or collects UEFI variables.
+Use `--snapshot` to resolve from a validated snapshot's DMI identity; local DMI
+is never substituted when that snapshot lacks identity.
 
 The output directory must be missing or empty and safe. A successful download
 contains only the original firmware-image basename and `fetch.json`, both
@@ -276,8 +288,11 @@ artifact hosts is allowed. Ambient proxy discovery is disabled in this first
 release. See [`docs/safety.md`](docs/safety.md) for the exact boundary.
 
 Machine-readable modes emit one JSON object. `fetch --resolve-only --json`
-reports the selected release without downloading. `fetch -o firmware/ --json`
-includes saved paths and the same format-1 provenance written to `fetch.json`.
+reports the selected release without downloading. Its advertised checksum
+target is `undetermined` because no bytes were retrieved. A successful
+`fetch -o firmware/ --json` includes saved paths and the same format-2
+provenance written to `fetch.json`, with a verified checksum target of
+`artifact` or `image` when ASUS advertised a checksum.
 
 ### `probe` — what is this machine?
 
@@ -530,19 +545,14 @@ the schema, decode, export, and diff pipeline is shared.
 | Schema | `schema/` | Menu paths, options, defaults, stable setting ids |
 | Values | `decode.py` | Read variables, decode by offset, resolve CPU-family variants |
 | Diff | `diff.py` | Compare variables and named settings |
-| Fetch | `fetch.py` + `safety.py` | Resolve one supported official release; retrieve and validate it within fixed network/archive limits |
+| Fetch | `fetch.py` + `safety.py` | Resolve an exact official release through capability gates; retrieve and validate it within fixed network/archive limits |
 
 ## Firmware-image support
 
-The 1.0 hardware support scope is the ASUS ROG Strix X870E-E Gaming WiFi with
-firmware 2402. The other entries below are parser coverage for post-1.0 hardware
-validation, not 1.0 support claims.
-
-Automatic retrieval is narrower than parser support: it currently supports
-only the retail ASUS ROG Strix X870E-E Gaming WiFi. The official release-2402
-path was revalidated on 2026-09-10: ASUS's published SHA-256 matched the
-19,203,110-byte ZIP, its 33,558,528-byte CAP produced 5,376 settings, and
-installed-firmware identity remained explicitly `unverified`.
+Physical decoding support and automatic retrieval evidence are separate. The
+1.0 hardware support scope is the ASUS ROG Strix X870E-E Gaming WiFi with
+firmware 2402. The other physical-support entries below are parser coverage for
+post-1.0 hardware validation, not 1.0 support claims.
 
 | Image family | Support |
 |---|---|
@@ -553,12 +563,38 @@ installed-firmware identity remained explicitly `unverified`.
 | Insyde/Phoenix images | Unverified |
 | Tiano/EFI-1.1 compressed sections | Unsupported |
 
+### Automatic retrieval examples
+
+These five exact releases are representative live-smoke evidence for the
+capability gates, not a whitelist and not physical hardware validation.
+Retrieval succeeds or fails on the current endpoint response and the identity,
+exact-version, path, checksum, container, and parser gates described above.
+
+| Model | Endpoint verification date | Smoke version | Checksum target | DMI status |
+|---|---|---:|---|---|
+| ROG STRIX X870E-E GAMING WIFI | 2026-09-19 | 2402 | `artifact` | `override-only` |
+| ROG STRIX B650E-F GAMING WIFI | 2026-09-19 | 3881 | `artifact` | `override-only` |
+| TUF GAMING X870-PLUS WIFI | 2026-09-19 | 1681 | `artifact` | `override-only` |
+| TUF GAMING Z790-PLUS WIFI | 2026-09-19 | 1836 | `artifact` | `override-only` |
+| ROG STRIX Z790-E GAMING WIFI | 2026-09-19 | 3202 | `artifact` | `override-only` |
+
 ## Known limitations
 
 - **Use the matching firmware image.** Setting layouts can change between BIOS
   versions, even on the same motherboard. Use the image matching the installed
   version; `uefi-mirror` refuses definite mismatches unless `--allow-mismatch`
   is explicitly passed.
+
+- **Automatic identity must match ASUS's exact retail marketing name.** Generic
+  or differing DMI names and OEM/prebuilt ambiguity fail before artifact
+  retrieval. Use exact `--manufacturer`, `--model`, and `--bios-version`
+  overrides only after independently confirming the retail-board identity and
+  installed release; there is no fuzzy product discovery.
+
+- **Automatic retrieval accepts only reviewed containers.** Safe direct
+  firmware images and bounded ZIPs containing exactly one image are accepted.
+  Unsupported containers such as updater executables fail; vendor executables
+  and renamers are never run.
 
 - **Some settings are unavailable to the operating system.** Firmware can hide
   variables after boot. Those settings appear as `no_variable`; no userspace
@@ -598,8 +634,10 @@ $ ruff check .
 ### Manual fetch smoke test
 
 Fetching is read-only with respect to firmware, but it uses the network and
-writes the output directory you name. First resolve the reviewed release
-without downloading or writing files:
+writes the output directory you name. The X870E-E command below is one
+representative, live-verified example of the capability-based retrieval flow;
+it is not the only accepted model and does not define a whitelist. First resolve
+the exact release without downloading or writing files:
 
 ```console
 $ uefi-mirror fetch --manufacturer ASUS \
@@ -607,9 +645,10 @@ $ uefi-mirror fetch --manufacturer ASUS \
     --resolve-only --json | python -m json.tool
 ```
 
-The result should have `operation: "resolve"`, release `2402`, and publisher
-checksum status `advertised`. Then use a missing or empty directory to exercise
-download, checksum, archive, parser, and private-output validation:
+The format-2 result should have `operation: "resolve"`, release `2402`, and
+publisher checksum status `advertised` with target `undetermined`. Then use a
+missing or empty directory to exercise download, checksum, archive, parser, and
+private-output validation:
 
 ```console
 $ uefi-mirror fetch --manufacturer ASUS \
@@ -620,17 +659,18 @@ $ uefi-mirror schema \
     firmware-test-2402/ROG-STRIX-X870E-E-GAMING-WIFI-ASUS-2402.CAP
 ```
 
-For the validated 2402 artifact, `fetch.json` reports publisher checksum
-`verified` against the downloaded ZIP, a 33,558,528-byte image, 5,376 settings,
-and installed-firmware identity `unverified`. The schema command reports 5,376
+For this representative artifact, `fetch.json` reports format 2, publisher
+checksum `verified` against the downloaded ZIP with target `artifact`, a
+33,558,528-byte image, 5,376 settings, DMI status `override-only`, and
+installed-firmware identity `unverified`. The schema command reports 5,376
 settings in 15 form sets. The artifact checksum and successful parse do not
 prove that release 2402 is installed; confirm the machine's exact model,
 revision, and BIOS version independently before using the image for export.
 
 Automatic detection may deliberately refuse an OEM/prebuilt system even when
-its board name resembles the supported retail ASUS model. Use explicit
-identity overrides only after confirming that retail-board identity; refusal
-is safer than silently selecting incompatible firmware.
+its board name resembles an ASUS retail model. Use exact identity overrides
+only after confirming that retail-board identity; refusal is safer than
+silently selecting incompatible firmware.
 
 CI runs this offline suite on Python 3.12 and 3.13 on both `ubuntu-latest` and
 `windows-latest`, including fetch transport/archive tests and native Windows

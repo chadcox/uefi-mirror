@@ -8,15 +8,27 @@ Behavior changes since 1.0.0, pending the next release.
 
 ### Added
 
-- **Official BIOS image retrieval for one reviewed ASUS model.** The new
-  opt-in `fetch` command resolves an exact ROG Strix X870E-E Gaming WiFi release
-  from official ASUS metadata, downloads through a bounded HTTPS-only client,
-  verifies the published SHA-256 when present, safely selects a direct or ZIP
-  image, and requires usable parsed settings before writing the image and a
-  format-1 `fetch.json` provenance record. `--snapshot`, explicit identity and
-  version overrides, `--resolve-only`, and clean JSON output are supported.
-  Fetching never flashes firmware or upgrades compatibility beyond
-  `unverified`; other vendors and ASUS models retain the manual-image workflow.
+- **Capability-based official ASUS retail-motherboard retrieval.** The opt-in
+  `fetch` command now has capability-based support for exact ASUS
+  retail-motherboard models exposed by the reviewed endpoint, rather than a
+  fixed model registry. It fails closed unless ASUS identity is unambiguous,
+  the endpoint normalized-exactly echoes the requested model, the exact
+  requested release exists, the returned path and host are approved, a direct
+  image or bounded ZIP contains exactly one safe firmware image, an advertised
+  SHA-256 matches its discovered `artifact` or `image` target, and the verified
+  image parses with at least one setting. It never falls back to latest,
+  flashes firmware, executes vendor tools, or expands the existing network and
+  output-write boundaries.
+- **Fetch provenance format 2.** Resolve-only output records an advertised
+  checksum target as `undetermined`; a successful verified download records the
+  target discovered from the bytes as `artifact` or `image`. Snapshot remains
+  format 1 and schema/export remain format 3; package version remains 1.0.0.
+  `--snapshot`, explicit identity/version overrides, `--resolve-only`, and
+  clean JSON output remain supported.
+- **Representative live retrieval evidence.** Exact releases X870E-E/2402,
+  B650E-F/3881, TUF X870-PLUS/1681, TUF Z790-PLUS/1836, and Z790-E/3202 passed
+  format-2 resolve/download smokes against official ASUS endpoints. These are
+  evidence examples, not a whitelist or physical hardware-validation claims.
 
 ### Changed
 

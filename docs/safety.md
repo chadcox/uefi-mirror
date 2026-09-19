@@ -78,6 +78,13 @@ memory; paths, duplicates, links, encryption, unsupported compression, and
 ambiguous firmware members are refused. Vendor executables and renamers are
 never read from the archive or run.
 
+Bounded ZIP inspection and extraction may occur before publisher-checksum
+verification only to determine whether the advertised hash covers the
+downloaded artifact or the extracted image. If a checksum is advertised, a
+match against one of those discovered targets is required before firmware
+parsing or output; mismatch against both is fatal. Parser validation must still
+find at least one setting before output.
+
 These controls bound an official-source client. They do not make a compromised
 vendor server or local DNS trustworthy. A verified publisher checksum proves
 only that the downloaded bytes match the checksum's documented target; parsing

@@ -265,6 +265,102 @@ def test_representative_fixture_provenance_is_valid(
     assert "Sanitized to parser-consumed fields" in provenance["note"]
 
 
+def test_readme_automatic_retrieval_examples_match_tracked_evidence():
+    root = Path(__file__).parents[1]
+    readme_columns = (
+        "Model",
+        "Endpoint verification date",
+        "Smoke version",
+        "Checksum target",
+        "DMI status",
+    )
+    evidence_columns = (
+        "Model",
+        "Endpoint verification date",
+        "Smoke version",
+        "Release date",
+        "Final host",
+        "Artifact bytes",
+        "Artifact SHA-256",
+        "Image bytes",
+        "Image file SHA-256",
+        "Image payload SHA-256",
+        "Settings",
+        "Checksum target",
+        "DMI status",
+    )
+
+    def table_after(path, marker, columns):
+        lines = path.read_text(encoding="utf-8").splitlines()
+        marker_index = next(
+            index for index, line in enumerate(lines) if line.strip() == marker
+        )
+        marker_level = len(marker) - len(marker.lstrip("#"))
+        section_end = next(
+            (
+                index
+                for index in range(marker_index + 1, len(lines))
+                if re.fullmatch(r"#{1,%d} .+" % marker_level, lines[index].strip())
+            ),
+            len(lines),
+        )
+        table_index = next(
+            index
+            for index in range(marker_index + 1, section_end)
+            if lines[index].strip().startswith("|")
+        )
+
+        def cells(line):
+            values = [value.strip() for value in line.strip().strip("|").split("|")]
+            return [
+                value[1:-1] if value.startswith("`") and value.endswith("`") else value
+                for value in values
+            ]
+
+        assert tuple(cells(lines[table_index])) == columns
+        separators = cells(lines[table_index + 1])
+        assert len(separators) == len(columns)
+        assert all(re.fullmatch(r":?-{3,}:?", value) for value in separators)
+
+        rows = []
+        for line in lines[table_index + 2:]:
+            if not line.strip().startswith("|"):
+                break
+            values = cells(line)
+            assert len(values) == len(columns)
+            rows.append(dict(zip(columns, values, strict=True)))
+        return rows
+
+    readme_rows = table_after(
+        root / "README.md",
+        "### Automatic retrieval examples",
+        readme_columns,
+    )
+    evidence_rows = table_after(
+        root / "docs" / "release-checklist.md",
+        "## Post-1.0 coverage",
+        evidence_columns,
+    )
+    fixture_models = [values[0] for values in REPRESENTATIVE_FIXTURES]
+    readme_models = [row["Model"] for row in readme_rows]
+    evidence_models = [row["Model"] for row in evidence_rows]
+    evidence_by_model = {row["Model"]: row for row in evidence_rows}
+
+    assert len(readme_models) == len(set(readme_models))
+    assert len(evidence_models) == len(set(evidence_models))
+    assert readme_models == fixture_models
+    assert evidence_models == fixture_models
+    assert readme_rows == [
+        {column: evidence_by_model[model][column] for column in readme_columns}
+        for model in fixture_models
+    ]
+    assert {row["Checksum target"] for row in readme_rows} <= {"artifact", "image"}
+    assert {row["DMI status"] for row in readme_rows} <= {
+        "verified",
+        "override-only",
+    }
+
+
 @pytest.mark.parametrize(
     "model,_stable,_older,_beta,_leading_zero,_uppercase_mb",
     REPRESENTATIVE_FIXTURES,
