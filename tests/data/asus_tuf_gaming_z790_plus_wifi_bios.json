@@ -1,0 +1,45 @@
+{
+  "_fixture": {
+    "source": "https://www.asus.com/support/webapi/ProductV2/GetPDBIOS?website=global&model=tuf%20gaming%20z790-plus%20wifi&pdhashedid=&pdid=99999&cpu=&siteID=www&sitelang=",
+    "retrieved": "2026-09-19",
+    "note": "Sanitized to parser-consumed fields and releases needed for offline contract tests."
+  },
+  "Status": "SUCCESS",
+  "Result": {
+    "Model": "TUF GAMING Z790-PLUS WIFI",
+    "Obj": [
+      {
+        "Name": "BIOS",
+        "Files": [
+          {
+            "Version": "1836",
+            "ReleaseDate": "2026/05/14",
+            "IsRelease": "1",
+            "DownloadUrl": {
+              "Global": "/pub/ASUS/mb/BIOS/TUF-GAMING-Z790-PLUS-WIFI-ASUS-1836.zip"
+            },
+            "sha256": "395EE06891E297BAB93CC8DAA7D7F132846859C43EB997364EF6728AAEC49ED5"
+          },
+          {
+            "Version": "1825",
+            "ReleaseDate": "2025/10/28",
+            "IsRelease": "1",
+            "DownloadUrl": {
+              "Global": "/pub/ASUS/mb/BIOS/TUF-GAMING-Z790-PLUS-WIFI-ASUS-1825.zip"
+            },
+            "sha256": "C15E4D134F7961FBE8B1D31891303971533D1906E9A9816590F6850939D6669E"
+          },
+          {
+            "Version": "1645",
+            "ReleaseDate": "2024/03/19",
+            "IsRelease": "1",
+            "DownloadUrl": {
+              "Global": "/pub/ASUS/MB/BIOS/TUF-GAMING-Z790-PLUS-WIFI-ASUS-1645.zip"
+            },
+            "sha256": ""
+          }
+        ]
+      }
+    ]
+  }
+}
