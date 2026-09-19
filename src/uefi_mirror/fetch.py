@@ -290,11 +290,14 @@ def parse_asus_metadata(
         root = _mapping(json.loads(data), "root")
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise ValueError(f"invalid ASUS metadata JSON: {exc}") from exc
+    expected_model = _text(requested_model)
     if root.get("Status") != "SUCCESS":
-        raise ValueError("ASUS metadata request did not report success")
+        raise ValueError(
+            f"ASUS metadata did not recognize exact model {expected_model!r}; "
+            "check ASUS spelling or pass the exact retail model with --model"
+        )
     result = _mapping(root.get("Result"), "Result")
     returned_model = _required_text(result, "Model")
-    expected_model = _text(requested_model)
     if returned_model.casefold() != expected_model.casefold():
         raise ValueError(
             f"ASUS metadata returned product {returned_model!r}, "

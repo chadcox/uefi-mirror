@@ -1198,8 +1198,25 @@ def test_identical_records_are_deduplicated():
     assert len([release for release in releases if release.version == "2402"]) == 1
 
 
+def test_non_success_metadata_names_clean_model_and_explains_recovery():
+    document = json.loads(_metadata())
+    document["Status"] = "ERROR"
+
+    with pytest.raises(ValueError) as exc:
+        fetch.parse_asus_metadata(
+            json.dumps(document).encode(),
+            "  ROG   STRIX X870E-E UNKNOWN  ",
+            "rog strix x870e-e unknown",
+        )
+
+    assert exc.value.args == (
+        "ASUS metadata did not recognize exact model "
+        "'ROG STRIX X870E-E UNKNOWN'; check ASUS spelling or pass the exact "
+        "retail model with --model",
+    )
+
+
 @pytest.mark.parametrize("mutation, match", [
-    (lambda doc: doc.update(Status="ERROR"), "did not report success"),
     (lambda doc: doc["Result"].update(Model="ROG STRIX X870E-F GAMING WIFI"),
      "returned product"),
     (lambda doc: doc["Result"].update(Obj={}), "Result.Obj must be an array"),
