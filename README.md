@@ -263,11 +263,12 @@ exact ASUS retail-motherboard models exposed by the reviewed endpoint. It fails
 closed unless the request identifies ASUS without OEM/prebuilt ambiguity, the
 endpoint normalized-exactly echoes the requested model, and the exact requested
 version exists (there is no fallback to latest). The returned release must also
-use the reviewed download path and host, have a supported direct-image or
-bounded-ZIP container with exactly one safe firmware image, match an advertised
-publisher SHA-256 against the discovered `artifact` or `image` target, and
-produce at least one setting when parsed. Firmware parsing occurs only after
-advertised checksum verification.
+use the reviewed download path and host and have a supported direct-image or
+bounded-ZIP container with exactly one safe firmware image. When ASUS
+advertises a publisher SHA-256, it must match the discovered `artifact` or
+`image` target; a missing publisher checksum is allowed and reported as
+`unavailable`. In either case, the parser must find at least one setting.
+Firmware parsing occurs only after any advertised checksum is verified.
 
 It never flashes firmware, executes vendor tools, or collects UEFI variables.
 Use `--snapshot` to resolve from a validated snapshot's DMI identity; local DMI
@@ -661,10 +662,12 @@ $ uefi-mirror schema \
 
 For this representative artifact, `fetch.json` reports format 2, publisher
 checksum `verified` against the downloaded ZIP with target `artifact`, a
-33,558,528-byte image, 5,376 settings, DMI status `override-only`, and
-installed-firmware identity `unverified`. The schema command reports 5,376
-settings in 15 form sets. The artifact checksum and successful parse do not
-prove that release 2402 is installed; confirm the machine's exact model,
+33,558,528-byte image, 5,376 settings, the explicit identity overrides, and
+installed-firmware identity `unverified`. The smoke/evidence row is
+`override-only` because the command supplies those overrides. The schema
+command reports 5,376 settings in 15 form sets. The artifact checksum and
+successful parse do not prove that release 2402 is installed; confirm the
+machine's exact model,
 revision, and BIOS version independently before using the image for export.
 
 Automatic detection may deliberately refuse an OEM/prebuilt system even when

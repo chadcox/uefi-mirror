@@ -13,12 +13,13 @@ Behavior changes since 1.0.0, pending the next release.
   retail-motherboard models exposed by the reviewed endpoint, rather than a
   fixed model registry. It fails closed unless ASUS identity is unambiguous,
   the endpoint normalized-exactly echoes the requested model, the exact
-  requested release exists, the returned path and host are approved, a direct
-  image or bounded ZIP contains exactly one safe firmware image, an advertised
-  SHA-256 matches its discovered `artifact` or `image` target, and the verified
-  image parses with at least one setting. It never falls back to latest,
-  flashes firmware, executes vendor tools, or expands the existing network and
-  output-write boundaries.
+  requested release exists, the returned path and host are approved, and a
+  direct image or bounded ZIP contains exactly one safe firmware image. When
+  ASUS advertises a SHA-256, it must match its discovered `artifact` or `image`
+  target; a missing publisher checksum is allowed and reported `unavailable`.
+  Parser validation must still find at least one setting in either case. The
+  command never falls back to latest, flashes firmware, executes vendor tools,
+  or expands the existing network and output-write boundaries.
 - **Fetch provenance format 2.** Resolve-only output records an advertised
   checksum target as `undetermined`; a successful verified download records the
   target discovered from the bytes as `artifact` or `image`. Snapshot remains
