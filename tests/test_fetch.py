@@ -1238,3 +1238,20 @@ def test_changed_or_unsafe_metadata_shape_fails_closed(mutation, match):
             "ROG STRIX X870E-E GAMING WIFI",
             "rog strix x870e-e gaming wifi",
         )
+
+
+def test_walk_warnings_survive_into_validation_parser_warnings():
+    """A partially readable image still validates when it has parseable
+    settings; the drops are reported through parser_warnings, not hidden."""
+    package = fixtures.build_section(0x19, fixtures.build_package_list())
+    ui = fixtures.build_section(
+        0x15, "ExampleSetupDxe".encode("utf-16-le") + b"\x00\x00")
+    broken = fixtures.build_ffs_file(
+        fixtures.build_section(0x03, b"abcd") + b"\x00\x00\x00\x03")
+    image = fixtures.build_capsule(
+        fixtures.build_firmware_volume(
+            fixtures.build_ffs_file(package + ui) + broken))
+    result = fetch.validate_artifact(
+        _release(image, checksum=False), _artifact(image, "BIOS.CAP"))
+    assert result.settings_count == 1
+    assert any("malformed section" in w for w in result.parser_warnings)

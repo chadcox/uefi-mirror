@@ -30,6 +30,15 @@ Behavior changes since 1.0.0, pending the next release.
   B650E-F/3881, TUF X870-PLUS/1681, TUF Z790-PLUS/1836, and Z790-E/3202 passed
   format-2 resolve/download smokes against official ASUS endpoints. These are
   evidence examples, not a whitelist or physical hardware-validation claims.
+- **Firmware volume walker warnings.** The firmware volume walker now
+  records every place it had to give up: malformed section or file headers,
+  sections whose decompressor this parser does not implement, and
+  decompression, file, or nesting budget exhaustion. The notes join the
+  schema's `warnings` channel and appear in `schema`, `export`, and `diff`
+  output on every surface (terminal, text, JSON, and HTML), so a partially
+  readable image says so instead of silently under-reporting. The diff JSON
+  document gains the same notes as an additive `warnings` array, present
+  only when non-empty. A fully readable image produces no walk warnings.
 
 ### Changed
 

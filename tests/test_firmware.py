@@ -55,7 +55,7 @@ def test_empty_file_is_rejected(tmp_path):
 
 
 def test_walk_finds_the_file_and_its_ui_name():
-    files = firmware_volume.walk(fixtures.build_image())
+    files = firmware_volume.walk(fixtures.build_image()).files
     assert len(files) == 1
     assert files[0].guid == str(fixtures.FFS_GUID)
     assert files[0].ui_name == "ExampleSetupDxe"
@@ -65,7 +65,7 @@ def test_walk_finds_the_file_and_its_ui_name():
 def test_volume_with_a_bad_checksum_is_ignored():
     image = bytearray(fixtures.build_image())
     image[50] ^= 0xFF  # corrupt the header checksum
-    assert firmware_volume.walk(bytes(image)) == []
+    assert firmware_volume.walk(bytes(image)).files == []
 
 
 def test_string_package_round_trip():
@@ -112,14 +112,14 @@ def test_form_set_parsing_extracts_varstore_and_question():
 
 
 def test_package_lists_pair_forms_with_strings_from_the_same_file():
-    packages = hii.collect(firmware_volume.walk(fixtures.build_image()))
+    packages = hii.collect(firmware_volume.walk(fixtures.build_image()).files)
     assert len(packages) == 1
     assert packages[0].text(4) == "Above 4G Decoding"
 
 
 def test_schema_build_produces_a_named_setting_with_a_menu_path():
     image = fixtures.build_image()
-    schema = builder.build({"payload_size": len(image)}, firmware_volume.walk(image))
+    schema = builder.build({"payload_size": len(image)}, firmware_volume.walk(image).files)
     assert schema.warnings == []
     setting, = schema.settings
     assert setting.name == "Above 4G Decoding"
@@ -146,7 +146,7 @@ def test_compatibility_hints_do_not_upgrade_to_matched():
     status stays 'unverified' -- under both a matching and a bare filename,
     and even when no BIOS version is installed at all."""
     image = fixtures.build_image()
-    schema = builder.build({}, firmware_volume.walk(image))
+    schema = builder.build({}, firmware_volume.walk(image).files)
     store = _live_store(bytes(0x100))
     decoded = decode.decode_all(schema.settings, store)
     dmi = {"board_name": "Example Board", "bios_version": "1.2"}
@@ -172,7 +172,7 @@ def test_compatibility_hints_do_not_upgrade_to_matched():
 
 def test_compatibility_rejects_a_varstore_too_short_for_the_schema():
     image = fixtures.build_image()
-    schema = builder.build({}, firmware_volume.walk(image))
+    schema = builder.build({}, firmware_volume.walk(image).files)
     store = _live_store(bytes(8))
     result = decode.check_compatibility(
         schema.settings, store, image, {}, decode.decode_all(schema.settings, store))
@@ -182,7 +182,7 @@ def test_compatibility_rejects_a_varstore_too_short_for_the_schema():
 
 def test_decode_reads_the_live_value_and_labels_it():
     image = fixtures.build_image()
-    schema = builder.build({}, firmware_volume.walk(image))
+    schema = builder.build({}, firmware_volume.walk(image).files)
     payload = bytearray(0x100)
     payload[0x90] = 1
     item = decode.decode_setting(schema.settings[0], _live_store(bytes(payload)))
@@ -193,7 +193,7 @@ def test_decode_reads_the_live_value_and_labels_it():
 
 def test_decode_flags_a_value_that_differs_from_the_default():
     image = fixtures.build_image()
-    schema = builder.build({}, firmware_volume.walk(image))
+    schema = builder.build({}, firmware_volume.walk(image).files)
     item = decode.decode_setting(schema.settings[0], _live_store(bytes(0x100)))
     assert item.label == "Disabled"
     assert item.is_default is False
@@ -202,7 +202,7 @@ def test_decode_flags_a_value_that_differs_from_the_default():
 
 def test_decode_reports_a_value_no_option_declares():
     image = fixtures.build_image()
-    schema = builder.build({}, firmware_volume.walk(image))
+    schema = builder.build({}, firmware_volume.walk(image).files)
     payload = bytearray(0x100)
     payload[0x90] = 0x42
     item = decode.decode_setting(schema.settings[0], _live_store(bytes(payload)))
@@ -226,7 +226,7 @@ def test_dynamic_global_questions_are_not_misreported_as_invalid_enums(name, pay
 
 def test_decode_handles_missing_and_short_variables():
     image = fixtures.build_image()
-    setting = builder.build({}, firmware_volume.walk(image)).settings[0]
+    setting = builder.build({}, firmware_volume.walk(image).files).settings[0]
     assert decode.decode_setting(setting, decode.VariableStore()).status == decode.NO_VARIABLE
     assert decode.decode_setting(setting, _live_store(b"\x00" * 8)).status == decode.OUT_OF_RANGE
 
@@ -352,8 +352,7 @@ def test_scoped_checkbox_default_expression_is_parsed():
 
 
 def test_date_and_time_are_included_but_actions_are_not_settings():
-    schema = builder.build({}, firmware_volume.walk(
-        fixtures.build_image(fixtures.build_question_kinds_ifr())))
+    schema = builder.build({}, firmware_volume.walk(fixtures.build_image(fixtures.build_question_kinds_ifr())).files)
     assert [(setting.name, setting.type) for setting in schema.settings] == [
         ("Date", "date"), ("Time", "time")]
     assert all(decode.decode_setting(setting, _live_store(b"\x00" * 16)).status
@@ -374,7 +373,7 @@ def test_snapshot_round_trip_feeds_the_decoder(tmp_path):
 
     store = decode.from_snapshot(str(tmp_path))
     assert store.get("Setup", str(fixtures.VARSTORE_GUID).upper()) == bytes(payload)
-    schema = builder.build({}, firmware_volume.walk(fixtures.build_image()))
+    schema = builder.build({}, firmware_volume.walk(fixtures.build_image()).files)
     assert decode.decode_setting(schema.settings[0], store).label == "Enabled"
 
 
@@ -385,7 +384,7 @@ def test_snapshot_directory_without_a_manifest_is_rejected(tmp_path):
 
 def test_text_report_marks_changes_and_stays_plain():
     image = fixtures.build_image()
-    schema = builder.build({"file_sha256": "abc"}, firmware_volume.walk(image))
+    schema = builder.build({"file_sha256": "abc"}, firmware_volume.walk(image).files)
     store = _live_store(bytes(0x100))
     decoded = decode.decode_all(schema.settings, store)
     document = report.build_document(schema, store, decoded)
@@ -399,7 +398,7 @@ def test_text_report_marks_changes_and_stays_plain():
 
 
 def test_html_report_is_self_contained_and_embedded_json_round_trips():
-    schema = builder.build({"file_sha256": "abc"}, firmware_volume.walk(fixtures.build_image()))
+    schema = builder.build({"file_sha256": "abc"}, firmware_volume.walk(fixtures.build_image()).files)
     document = report.build_document(schema, _live_store(bytes(0x100)),
                                      decode.decode_all(schema.settings, _live_store(bytes(0x100))))
     html = report.to_html(document, {"grep": "Above 4G", "changed_only": True}).decode()
@@ -428,3 +427,155 @@ def test_html_report_escapes_script_breakouts_without_changing_data():
     assert attack not in html
     assert "\\u003c/script\\u003e\\u003cscript\\u003e" in embedded.group(1)
     assert html.count("<script") == 3
+
+
+def test_a_malformed_section_warns_and_drops_the_rest_of_the_list():
+    """A section list that dies mid-way must be reported, not silently
+    shortened: the schema built from the same walk carries the warning."""
+    good = fixtures.build_section(0x03, b"abcd")
+    bad = b"\x00\x00\x00\x03"  # size zero: smaller than its own header
+    image = fixtures.build_firmware_volume(
+        fixtures.build_ffs_file(good + bad))
+    result = firmware_volume.walk(image)
+    (file,) = result.files
+    assert [section.type for section in file.sections] == [0x03]
+    assert any("malformed section" in w and "rest of section list dropped" in w
+               for w in result.warnings)
+    schema = builder.build({}, result.files, result.warnings)
+    assert schema.warnings == result.warnings
+
+
+def test_a_truncated_section_header_warns_when_the_tail_is_not_fill():
+    good = fixtures.build_section(0x03, b"abcd")
+    image = fixtures.build_firmware_volume(
+        fixtures.build_ffs_file(good + b"\x12\x34"))
+    result = firmware_volume.walk(image)
+    assert any("malformed section" in w and "rest of section list dropped" in w
+               for w in result.warnings)
+
+
+def test_a_malformed_file_header_warns_and_drops_the_rest_of_the_volume():
+    good = fixtures.build_ffs_file(fixtures.build_section(0x03, b"abcd"))
+    bad = b"\x11" * 16 + bytes([0x02, 0x00]) + b"\xff\xff\xff"  # size 0xFFFFFF
+    bad += b"\x00" * (32 - len(bad))
+    image = fixtures.build_firmware_volume(good + bad)
+    result = firmware_volume.walk(image)
+    assert len(result.files) == 1
+    assert any("malformed file header" in w and "rest of volume dropped" in w
+               for w in result.warnings)
+
+
+def test_erased_space_terminates_a_volume_without_warning():
+    good = fixtures.build_ffs_file(fixtures.build_section(0x03, b"abcd"))
+    result = firmware_volume.walk(
+        fixtures.build_firmware_volume(good + b"\xff" * 32))
+    assert len(result.files) == 1
+    assert result.warnings == []
+
+
+def test_zero_erased_space_terminates_a_polarity_clear_volume_without_warning():
+    good = fixtures.build_ffs_file(fixtures.build_section(0x03, b"abcd"))
+    attributes = 0x0004FEFF & ~0x0800
+    result = firmware_volume.walk(
+        fixtures.build_firmware_volume(
+            good + b"\x00" * 32, attributes=attributes))
+    assert len(result.files) == 1
+    assert result.warnings == []
+
+
+def test_a_truncated_file_header_warns_when_the_tail_is_not_erased():
+    good = fixtures.build_ffs_file(fixtures.build_section(0x03, b"abcd"))
+    result = firmware_volume.walk(
+        fixtures.build_firmware_volume(good + b"\x12\x34\x56\x78"))
+    assert len(result.files) == 1
+    assert any("malformed file header" in w and "rest of volume dropped" in w
+               for w in result.warnings)
+
+
+def test_an_unknown_decompressor_guid_warns_with_its_guid():
+    """PROCESSING_REQUIRED means the firmware expected a decompressor this
+    parser does not implement; the warning must name the GUID to find it."""
+    guid = uuid.UUID("71973d77-bf8a-426c-880f-a1a4c1c3a3a1")
+    body = guid.bytes_le + struct.pack("<HH", 24, 0x0001) + b"\x00" * 12
+    image = fixtures.build_firmware_volume(
+        fixtures.build_ffs_file(fixtures.build_section(0x02, body)))
+    result = firmware_volume.walk(image)
+    (file,) = result.files
+    assert file.sections == []
+    (warning,) = result.warnings
+    assert "unknown decompressor GUID" in warning
+    assert str(guid) in warning
+
+
+def test_encapsulation_beyond_the_depth_cap_warns_and_keeps_the_leaf():
+    leaf = fixtures.build_section(0x03, b"abcd")
+    wrapped = leaf
+    for _ in range(firmware_volume.MAX_DEPTH + 1):
+        wrapped = fixtures.build_section(
+            0x01, struct.pack("<I", len(wrapped)) + b"\x00" + wrapped)
+    image = fixtures.build_firmware_volume(fixtures.build_ffs_file(wrapped))
+    result = firmware_volume.walk(image)
+    (file,) = result.files
+    assert any("nesting budget" in w for w in result.warnings)
+    assert file.sections[-1].type == 0x01  # raw wrapper, not its contents
+
+
+def test_the_file_budget_warns_when_reached(monkeypatch):
+    monkeypatch.setattr(firmware_volume, "MAX_FILES", 2)
+    file = fixtures.build_ffs_file(fixtures.build_section(0x03, b"a"))
+    image = fixtures.build_firmware_volume(file * 3)
+    result = firmware_volume.walk(image)
+    assert len(result.files) == 2
+    assert any("file budget" in w for w in result.warnings)
+
+
+def test_the_file_budget_does_not_warn_when_reached_at_volume_end(monkeypatch):
+    monkeypatch.setattr(firmware_volume, "MAX_FILES", 1)
+    file = fixtures.build_ffs_file(fixtures.build_section(0x03, b"a"))
+    result = firmware_volume.walk(fixtures.build_firmware_volume(file))
+    assert len(result.files) == 1
+    assert result.warnings == []
+
+
+def _document_from_image(image: bytes):
+    walk_result = firmware_volume.walk(image)
+    schema = builder.build({"file_sha256": "abc"}, walk_result.files,
+                           walk_result.warnings)
+    store = _live_store(bytes(0x100))
+    decoded = decode.decode_all(schema.settings, store)
+    return report.build_document(schema, store, decoded), decoded
+
+
+def _broken_document():
+    """One healthy HII file and one file whose section list dies mid-way:
+    the document built from the image must carry that fact."""
+    package = fixtures.build_section(0x19, fixtures.build_package_list())
+    ui = fixtures.build_section(
+        0x15, "ExampleSetupDxe".encode("utf-16-le") + b"\x00\x00")
+    healthy = fixtures.build_ffs_file(package + ui)
+    broken = fixtures.build_ffs_file(
+        fixtures.build_section(0x03, b"abcd") + b"\x00\x00\x00\x03")
+    return _document_from_image(
+        fixtures.build_firmware_volume(healthy + broken))
+
+
+def test_text_export_renders_parser_warnings():
+    document, decoded = _broken_document()
+    text = report.to_text(document, decoded, "Example export")
+    assert "[warnings]" in text
+    assert "malformed section" in text
+    clean, clean_decoded = _document_from_image(fixtures.build_image())
+    assert "[warnings]" not in report.to_text(clean, clean_decoded,
+                                              "Example export")
+
+
+def test_html_export_renders_parser_warnings_without_javascript():
+    """The warning is part of the report, not of the data blob: it must be
+    visible in the static markup, not only in the embedded JSON."""
+    document, _ = _broken_document()
+    page = report.to_html(document).decode()
+    assert 'id="warnings"' in page
+    assert "Parser warnings" in page
+    assert "malformed section" in page
+    clean, _ = _document_from_image(fixtures.build_image())
+    assert 'id="warnings"' not in report.to_html(clean).decode()

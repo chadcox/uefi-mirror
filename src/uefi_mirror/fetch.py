@@ -511,9 +511,10 @@ def validate_artifact(release: Release, artifact: safety.HttpResult) -> Validate
         raise ValueError("publisher SHA-256 mismatch for artifact and image")
     try:
         capsule = cap.parse(image_data, image_name)
+        walk = firmware_volume.walk(capsule.data)
         schema = builder.build(
             {**capsule.info(), "filename": image_name},
-            firmware_volume.walk(capsule.data),
+            walk.files, walk.warnings,
         )
     except (ValueError, RuntimeError) as exc:
         raise ValueError(f"firmware image validation failed: {exc}") from exc

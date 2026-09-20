@@ -18,6 +18,7 @@ _LZMA_GUID_LE = LZMA_CUSTOM_DECOMPRESS_GUID.bytes_le
 FV_SIGNATURE = b"_FVH"
 FV_SIGNATURE_OFFSET = 40
 FV_HEADER_MIN = 56
+FV_ATTR_ERASE_POLARITY = 0x00000800
 
 FFS_HEADER_SIZE = 24
 FFS_ATTRIB_LARGE_FILE = 0x01
@@ -32,6 +33,7 @@ ENCAPSULATION_SECTIONS = {SECTION_COMPRESSION, SECTION_GUID_DEFINED,
                           SECTION_FIRMWARE_VOLUME_IMAGE}
 
 COMPRESSION_NONE = 0x00
+GUID_ATTR_PROCESSING_REQUIRED = 0x0001
 
 MAX_TOTAL_DECOMPRESSED = 512 << 20
 MAX_SECTION_OUTPUT = 128 << 20
@@ -58,13 +60,27 @@ class FfsFile:
         return self.ui_name or self.guid
 
 
+@dataclass
+class WalkResult:
+    """Everything the walk found, and every place it had to give up.
+
+    A drop is recorded, never hidden: each warning says what was lost, where,
+    and why, so a schema built from a partially readable image can say so
+    instead of quietly under-reporting."""
+
+    files: list[FfsFile]
+    warnings: list[str] = field(default_factory=list)
+
+
 class _Walk:
-    """Shared state: the decompression budget and every file discovered so far,
-    including files that live inside nested volumes."""
+    """Shared state: the decompression budget, every file discovered so far
+    (including files inside nested volumes), and every place content was
+    dropped."""
 
     def __init__(self, total: int) -> None:
         self.remaining = total
         self.files: list[FfsFile] = []
+        self.warnings: list[str] = []
 
 
 def decompress_lzma(blob: bytes, limit: int) -> bytes | None:
@@ -81,6 +97,18 @@ def decompress_lzma(blob: bytes, limit: int) -> bytes | None:
         if out and len(out) <= limit:
             return out
     return None
+
+
+def _warn_dropped(walk_state: "_Walk", where: str, what: str) -> None:
+    walk_state.warnings.append(f"{where}; {what}")
+
+
+def _is_uniform_fill(data: bytes, start: int, end: int,
+                     allowed: tuple[int, ...]) -> bool:
+    if start >= end:
+        return True
+    fill = data[start]
+    return fill in allowed and all(data[pos] == fill for pos in range(start + 1, end))
 
 
 def _fv_header(buf: bytes, start: int) -> tuple[int, int] | None:
@@ -126,19 +154,34 @@ def _iter_sections(data: bytes, path: str, walk_state: "_Walk", depth: int):
         body_offset = 4
         if size == 0xFFFFFF:
             if pos + 8 > len(data):
+                _warn_dropped(
+                    walk_state, f"malformed section at {path}/sec@0x{pos:x}",
+                    "rest of section list dropped")
                 return
             size = struct.unpack_from("<I", data, pos + 4)[0]
             body_offset = 8
         if size < body_offset or pos + size > len(data):
+            _warn_dropped(
+                walk_state, f"malformed section at {path}/sec@0x{pos:x}",
+                "rest of section list dropped")
             return
         body = data[pos + body_offset:pos + size]
         here = f"{path}/sec@0x{pos:x}"
 
         if stype in ENCAPSULATION_SECTIONS and depth < MAX_DEPTH:
             yield from _unwrap(stype, body, here, walk_state, depth)
+        elif stype in ENCAPSULATION_SECTIONS:
+            _warn_dropped(
+                walk_state, f"nesting budget of {MAX_DEPTH} exceeded at {here}",
+                "encapsulation section left unwrapped")
+            yield Section(stype, body, here)
         else:
             yield Section(stype, body, here)
         pos += (size + 3) & ~3  # sections are 4-byte aligned
+    if pos < len(data) and not _is_uniform_fill(data, pos, len(data), (0x00, 0xFF)):
+        _warn_dropped(
+            walk_state, f"malformed section at {path}/sec@0x{pos:x}",
+            "rest of section list dropped")
 
 
 def _unwrap(stype: int, body: bytes, path: str, walk_state: "_Walk", depth: int):
@@ -151,29 +194,58 @@ def _unwrap(stype: int, body: bytes, path: str, walk_state: "_Walk", depth: int)
         yield  # pragma: no cover - keeps this a generator
     if stype == SECTION_GUID_DEFINED:
         if len(body) < 20:
+            _warn_dropped(walk_state, f"malformed GUID-defined section at {path}",
+                          "content dropped")
             return
         section_guid = body[:16]
         data_offset = struct.unpack_from("<H", body, 16)[0]
         if not (20 <= data_offset - 4 <= len(body)):
+            _warn_dropped(walk_state, f"malformed GUID-defined section at {path}",
+                          "content dropped")
             return
         payload = body[data_offset - 4:]
         if section_guid == _LZMA_GUID_LE:
+            if walk_state.remaining <= 0:
+                _warn_dropped(
+                    walk_state, f"decompression budget exhausted at {path}",
+                    "content dropped")
+                return
             out = decompress_lzma(
                 payload, min(MAX_SECTION_OUTPUT, walk_state.remaining))
             if out is None:
+                _warn_dropped(walk_state,
+                              f"LZMA section did not decompress at {path}",
+                              "content dropped")
                 return
             walk_state.remaining -= len(out)
         else:
-            # Unknown GUID: attributes bit 0 clear means the data is plain.
+            # GUID-defined section: attributes bit 0 (PROCESSING_REQUIRED) set
+            # means the payload needs a decompressor this code does not know.
+            attributes = struct.unpack_from("<H", body, 18)[0]
+            if attributes & GUID_ATTR_PROCESSING_REQUIRED:
+                _warn_dropped(
+                    walk_state,
+                    "compressed section with unknown decompressor GUID "
+                    f"{uuid.UUID(bytes_le=section_guid)} at {path}",
+                    "content dropped")
+                return
             out = payload
         yield from _iter_sections(out, path, walk_state, depth + 1)
         return
     if stype == SECTION_COMPRESSION:
         if len(body) < 5:
+            _warn_dropped(walk_state, f"malformed compression section at {path}",
+                          "content dropped")
             return
         compression_type = body[4]
         if compression_type != COMPRESSION_NONE:
-            return  # Tiano/EFI-1.1 compression is not implemented
+            # 0x01 is EFI 1.1 (Tiano) compression, 0x02 LZHF: neither is
+            # implemented, so the content is dropped loudly, not misparsed.
+            _warn_dropped(
+                walk_state,
+                f"unsupported compression type {compression_type:#04x} at {path}",
+                "content dropped")
+            return
         yield from _iter_sections(body[5:], path, walk_state, depth + 1)
 
 
@@ -182,7 +254,11 @@ def _iter_files(buf: bytes, fv_start: int, header_length: int, fv_length: int,
     pos = fv_start + header_length
     end = fv_start + fv_length
     count = 0
+    fv_attributes = struct.unpack_from("<I", buf, fv_start + 44)[0]
+    erase_fill = (0xFF if fv_attributes & FV_ATTR_ERASE_POLARITY else 0x00,)
     while pos + FFS_HEADER_SIZE <= end and count < MAX_FILES:
+        if _is_uniform_fill(buf, pos, end, erase_fill):
+            return
         header = buf[pos:pos + FFS_HEADER_SIZE]
         size = int.from_bytes(header[20:23], "little")
         file_type = header[18]
@@ -190,10 +266,16 @@ def _iter_files(buf: bytes, fv_start: int, header_length: int, fv_length: int,
         body_offset = FFS_HEADER_SIZE
         if attributes & FFS_ATTRIB_LARGE_FILE:
             if pos + 32 > end:
+                _warn_dropped(
+                    walk_state, f"malformed file header at {path}/file@0x{pos - fv_start:x}",
+                    "rest of volume dropped")
                 return
             size = struct.unpack_from("<Q", buf, pos + 24)[0]
             body_offset = 32
         if size == 0xFFFFFF or size < body_offset or pos + size > end:
+            _warn_dropped(
+                walk_state, f"malformed file header at {path}/file@0x{pos - fv_start:x}",
+                "rest of volume dropped")
             return
         count += 1
         if file_type not in (FFS_FILE_TYPE_PAD, FFS_FILE_TYPE_FREE):
@@ -208,18 +290,32 @@ def _iter_files(buf: bytes, fv_start: int, header_length: int, fv_length: int,
                         "utf-16-le", errors="replace").rstrip("\x00")
             walk_state.files.append(file)
         pos += (size + 7) & ~7  # files are 8-byte aligned
+    if pos >= end or _is_uniform_fill(buf, pos, end, erase_fill):
+        return
+    if count >= MAX_FILES:
+        _warn_dropped(
+            walk_state, f"file budget of {MAX_FILES} reached at {path}",
+            "remaining files dropped")
+    else:
+        _warn_dropped(
+            walk_state, f"malformed file header at {path}/file@0x{pos - fv_start:x}",
+            "rest of volume dropped")
 
 
 def _walk_volumes(buf: bytes, path: str, walk_state: "_Walk", depth: int) -> None:
     if depth > MAX_DEPTH:
+        _warn_dropped(
+            walk_state, f"nesting budget of {MAX_DEPTH} exceeded at {path}",
+            "volume dropped")
         return
     for fv_start, header_length, fv_length in find_volumes(buf):
         _iter_files(buf, fv_start, header_length, fv_length,
                     f"{path}/fv@0x{fv_start:x}", walk_state, depth)
 
 
-def walk(image: bytes) -> list[FfsFile]:
-    """Every FFS file in the image, including files inside nested volumes."""
+def walk(image: bytes) -> WalkResult:
+    """Every FFS file in the image, including files inside nested volumes,
+    plus a warning for every place the walk had to give up."""
     walk_state = _Walk(MAX_TOTAL_DECOMPRESSED)
     _walk_volumes(image, "image", walk_state, 0)
-    return walk_state.files
+    return WalkResult(files=walk_state.files, warnings=walk_state.warnings)

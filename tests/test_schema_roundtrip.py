@@ -16,7 +16,7 @@ from uefi_mirror.schema.model import Schema, canonical_json, schema_hash
 def _schema(ifr=None):
     image = fixtures.build_image(ifr if ifr is not None
                                  else fixtures.build_conditional_ifr())
-    return builder.build({"name": "test.bin"}, firmware_volume.walk(image))
+    return builder.build({"name": "test.bin"}, firmware_volume.walk(image).files)
 
 
 def _store(master: int = 1, dependent: int = 0) -> decode.VariableStore:

@@ -155,12 +155,12 @@ def build_ffs_file(sections: bytes) -> bytes:
     return file + b"\x00" * (-len(file) % 8)
 
 
-def build_firmware_volume(files: bytes) -> bytes:
+def build_firmware_volume(files: bytes, attributes: int = 0x0004FEFF) -> bytes:
     header_length = 56 + 16
     fv_length = header_length + len(files)
     header = (b"\x00" * 16 + FV_FILESYSTEM_GUID.bytes_le
               + struct.pack("<Q", fv_length) + b"_FVH"
-              + struct.pack("<IHHHBB", 0x0004FEFF, header_length, 0, 0, 0, 2)
+              + struct.pack("<IHHHBB", attributes, header_length, 0, 0, 0, 2)
               + struct.pack("<IIQ", 1, 0x1000, 0))
     words = struct.unpack(f"<{len(header) // 2}H", header)
     checksum = (-sum(words)) & 0xFFFF

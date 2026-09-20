@@ -1,6 +1,7 @@
 """Assemble and render an export document: schema joined to live values."""
 
 import datetime
+import html
 import json
 
 from . import __version__
@@ -41,6 +42,8 @@ dl { margin:.3rem 0; display:grid; grid-template-columns:max-content 1fr; gap:.2
 dd { margin:0; overflow-wrap:anywhere } ul { margin:.3rem 0; padding-left:1.25rem }
 code { overflow-wrap:anywhere } .empty { padding:2rem; text-align:center }
 details.provenance { margin-top:1rem } details.provenance > div { padding:.8rem; border:1px solid var(--line) }
+.warnings { margin:1rem 0 0; padding:1rem; background:var(--panel); border:1px solid var(--mark) }
+.warnings strong { color:var(--mark) } .warnings ul { margin:.5rem 0 0 }
 @media (max-width:720px) { thead { position:absolute; clip:rect(0 0 0 0) } tr { display:block;
   padding:.5rem; border-bottom:1px solid var(--line) } td { display:grid; grid-template-columns:7rem 1fr;
   border:0; padding:.3rem; width:auto!important; min-width:0!important } td::before { content:attr(data-label);
@@ -217,6 +220,7 @@ _HTML_TEMPLATE = r"""<!doctype html>
 <style>{css}</style></head><body>
 <header><h1>UEFI settings export</h1><p id="subtitle" class="muted"></p>
 <div id="summary" class="summary" aria-label="Export summary"></div>
+{warnings}
 <details class="provenance"><summary>Image and collection provenance</summary><div><dl id="provenance"></dl></div></details></header>
 <main><h2>Settings</h2><form id="filters" class="controls">
 <div class="control search"><label for="search">Search settings</label><input id="search" type="search" autocomplete="off"></div>
@@ -294,12 +298,23 @@ def _script_json(value: object) -> str:
                        "\u2028": r"\u2028", "\u2029": r"\u2029"}))
 
 
+def _warnings_html(document: dict) -> str:
+    """Warnings are safety-critical, so they are rendered statically and stay
+    visible even with JavaScript disabled."""
+    warnings = document.get("warnings") or []
+    if not warnings:
+        return ""
+    items = "".join(f"<li>{html.escape(warning)}</li>" for warning in warnings)
+    return (f'<div id="warnings" class="warnings" role="note">'
+            f"<strong>Parser warnings</strong><ul>{items}</ul></div>")
+
+
 def to_html(document: dict, initial_filters: dict | None = None) -> bytes:
     """Render the complete export as a self-contained offline viewer."""
     return _HTML_TEMPLATE.format(
         format_version=document.get("format_version", ""), css=_HTML_CSS,
         data=_script_json(document), filters=_script_json(initial_filters or {}),
-        js=_HTML_JS).encode()
+        js=_HTML_JS, warnings=_warnings_html(document)).encode()
 
 
 def to_text(document: dict, decoded: list[DecodedSetting], title: str) -> str:
@@ -319,6 +334,12 @@ def to_text(document: dict, decoded: list[DecodedSetting], title: str) -> str:
             in document["counts"]["by_visibility"].items()),
         "",
     ]
+
+    warnings = document.get("warnings") or []
+    if warnings:
+        lines.append("[warnings]")
+        lines.extend(f"  {warning}" for warning in warnings)
+        lines.append("")
 
     section = None
     for item in decoded:

@@ -1,5 +1,7 @@
 """Turn parsed HII form packages into a flat, named setting schema."""
 
+from collections.abc import Sequence
+
 from ..firmware import hii, ifr
 from ..firmware.firmware_volume import FfsFile
 from .model import (
@@ -117,12 +119,16 @@ def _default_value(question: ifr.Question, default_id: int) -> int | None:
     return None
 
 
-def build(image_info: dict, files: list[FfsFile]) -> Schema:
+def build(image_info: dict, files: list[FfsFile],
+          walk_warnings: Sequence[str] = ()) -> Schema:
+    """Assemble the schema. `walk_warnings` are the drops the firmware volume
+    walker had to make; they become part of the schema's own warning channel
+    so a partially readable image says so in every report it produces."""
     packages = hii.collect(files)
     formsets: list[FormSetSummary] = []
     settings: list[Setting] = []
     varstores: list[VarStoreInfo] = []
-    warnings: list[str] = []
+    warnings: list[str] = list(walk_warnings)
 
     for package in packages:
         form_set = ifr.parse_form_set(package.ifr)

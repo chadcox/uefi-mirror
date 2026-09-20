@@ -135,7 +135,8 @@ def _load_schema(image: str | None,
             capsule = cap.load(image)
         except (OSError, ValueError, RuntimeError) as exc:
             raise typer.BadParameter(str(exc)) from exc
-        return (builder.build(capsule.info(), firmware_volume.walk(capsule.data)),
+        walk = firmware_volume.walk(capsule.data)
+        return (builder.build(capsule.info(), walk.files, walk.warnings),
                 capsule.data, os.path.basename(image))
     raise typer.BadParameter("pass a firmware image, or --schema with a schema JSON")
 
@@ -339,8 +340,11 @@ def schema(
     except (OSError, ValueError) as exc:
         raise typer.BadParameter(str(exc)) from exc
 
-    result = builder.build(capsule.info(), firmware_volume.walk(capsule.data))
+    walk = firmware_volume.walk(capsule.data)
+    result = builder.build(capsule.info(), walk.files, walk.warnings)
     result.image["filename"] = os.path.basename(image)
+    for warning in result.warnings:
+        console.print(f"  [yellow]warning[/] {warning}")
     if not result.settings:
         console.print("[red]No HII form packages found.[/] "
                       "The image may use a compression format that is not supported.")
@@ -359,8 +363,6 @@ def schema(
     console.print(f"{len(result.settings)} settings in {len(result.formsets)} form sets"
                   f" from {os.path.basename(image)}")
     console.print(f"  [dim]schema {schema_hash(result)[:16]}[/]")
-    for warning in result.warnings:
-        console.print(f"  [yellow]warning[/] {warning}")
     if grep:
         console.print(f"{len(matches)} match {grep!r}")
 
@@ -425,6 +427,8 @@ def export(
 
     if source_name:
         schema_result.image["filename"] = source_name
+    for warning in schema_result.warnings:
+        console.print(f"  [yellow]warning[/] {warning}")
     if not schema_result.settings:
         console.print("[red]No settings in the schema.[/]" if schema_file
                       else "[red]No HII form packages found in the image.[/]")
@@ -520,6 +524,9 @@ def diff(
     source_name = ""
     if image or schema_file:
         schema_result, image_bytes, source_name = _load_schema(image, schema_file)
+    if schema_result is not None:
+        for warning in schema_result.warnings:
+            console.print(f"  [yellow]warning[/] {warning}")
     try:
         old_store, new_store = load(old), load(new)
     except (OSError, ValueError, RuntimeError) as exc:
@@ -544,7 +551,9 @@ def diff(
         _check_image(schema_result, new_store, image_bytes, source_name, new_decoded,
                      allow_mismatch, os.path.basename(new))
 
-    result = diff_mod.build(old_store, new_store, old_decoded, new_decoded)
+    result = diff_mod.build(old_store, new_store, old_decoded, new_decoded,
+                            walk_warnings=schema_result.warnings
+                            if schema_result is not None else [])
     title = f"UEFI settings diff - {os.path.basename(old)} -> {os.path.basename(new)}"
     if output:
         _write_output(output, diff_mod.to_json(result) if fmt == "json"

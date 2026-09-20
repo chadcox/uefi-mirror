@@ -43,3 +43,5 @@ docs/*
 # Agent instructions are local tooling, not part of the shipped project.
 CLAUDE.md
 AGENTS.md
+.cartographer
+.omp

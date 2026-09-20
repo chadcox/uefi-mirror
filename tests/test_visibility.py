@@ -10,7 +10,7 @@ from uefi_mirror.schema.model import FormSetSummary
 
 def _schema():
     image = fixtures.build_image(fixtures.build_conditional_ifr())
-    return builder.build({}, firmware_volume.walk(image))
+    return builder.build({}, firmware_volume.walk(image).files)
 
 
 def _store(master: int, dependent: int = 0) -> decode.VariableStore:
@@ -108,8 +108,7 @@ def test_settings_of_an_inactive_form_set_are_marked_inactive():
 
 
 def test_conditional_duplicate_options_are_resolved_without_guessing():
-    schema = builder.build({}, firmware_volume.walk(
-        fixtures.build_image(fixtures.build_conditional_options_ifr())))
+    schema = builder.build({}, firmware_volume.walk(fixtures.build_image(fixtures.build_conditional_options_ifr())).files)
 
     def choices(payload):
         items = _by_name(decode.decode_all(schema.settings, _store_bytes(payload)))

@@ -24,6 +24,14 @@ Snapshots and exports can contain machine identifiers or boot paths and should
 be treated as private. Fetch provenance contains selected and available DMI
 identity plus source URLs and hashes, but no raw firmware variables. Schema JSON
 contains firmware definitions but no collected values.
+Schema JSON carries a `warnings` array of parser-level notes recorded while
+reading the image: unparsable form sets, and content the firmware volume
+walker had to drop (malformed section or file headers, sections that need a
+decompressor this parser does not implement, and budget exhaustion). The diff
+document carries those notes as an additive `warnings` array inside its
+`diff` object, present only when non-empty, so a partially readable image
+says so in every report built from it. A fully readable image produces no
+walk warnings; readers that predate the diff field ignore it.
 
 Fetch format 2 publishes the scope established by checksum validation:
 

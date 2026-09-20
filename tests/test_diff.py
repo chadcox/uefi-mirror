@@ -54,7 +54,7 @@ def _decoded(schema, value: int):
 
 
 def test_a_setting_change_is_reported_with_both_labels():
-    schema = builder.build({}, firmware_volume.walk(fixtures.build_image()))
+    schema = builder.build({}, firmware_volume.walk(fixtures.build_image()).files)
     result = diff.build(_setup_store(0), _setup_store(1),
                         _decoded(schema, 0), _decoded(schema, 1))
     change, = result.settings
@@ -65,7 +65,7 @@ def test_a_setting_change_is_reported_with_both_labels():
 
 
 def test_an_unchanged_setting_is_compared_but_not_reported():
-    schema = builder.build({}, firmware_volume.walk(fixtures.build_image()))
+    schema = builder.build({}, firmware_volume.walk(fixtures.build_image()).files)
     result = diff.build(_setup_store(1), _setup_store(1),
                         _decoded(schema, 1), _decoded(schema, 1))
     assert result.settings == []
@@ -75,7 +75,7 @@ def test_an_unchanged_setting_is_compared_but_not_reported():
 def test_a_setting_that_failed_to_decode_is_not_called_unchanged():
     """Missing on one side means uncomparable; silently reporting 'no change'
     would hide exactly the case the user cares about."""
-    schema = builder.build({}, firmware_volume.walk(fixtures.build_image()))
+    schema = builder.build({}, firmware_volume.walk(fixtures.build_image()).files)
     absent = decode.decode_all(schema.settings, decode.VariableStore(source="t"))
     result = diff.build(decode.VariableStore(source="t"), _setup_store(1),
                         absent, _decoded(schema, 1))
@@ -84,7 +84,7 @@ def test_a_setting_that_failed_to_decode_is_not_called_unchanged():
 
 
 def test_text_rendering_is_plain_and_mentions_both_sides():
-    schema = builder.build({}, firmware_volume.walk(fixtures.build_image()))
+    schema = builder.build({}, firmware_volume.walk(fixtures.build_image()).files)
     result = diff.build(_setup_store(0), _setup_store(1),
                         _decoded(schema, 0), _decoded(schema, 1))
     text = diff.to_text(result, "Example diff")
@@ -101,7 +101,7 @@ def test_json_rendering_round_trips():
 
 
 def test_inactive_variant_change_is_raw_only():
-    schema = builder.build({}, firmware_volume.walk(fixtures.build_image()))
+    schema = builder.build({}, firmware_volume.walk(fixtures.build_image()).files)
     old, new = _setup_store(0), _setup_store(1)
     old_decoded = decode.decode_all(schema.settings, old,
                                     {schema.settings[0].formset_guid})
@@ -111,3 +111,17 @@ def test_inactive_variant_change_is_raw_only():
     assert len(result.variables) == 1
     assert result.settings == []
     assert result.settings_compared == 0
+
+
+def test_walk_warnings_are_carried_into_the_document_and_rendered():
+    warning = ("file budget of 20000 reached at image/fv@0x48; "
+               "remaining files dropped")
+    result = diff.build(_setup_store(0), _setup_store(1), walk_warnings=[warning])
+    assert result.as_dict()["warnings"] == [warning]
+    text = diff.to_text(result, "Example diff")
+    assert "[warnings]" in text and warning in text
+
+
+def test_a_clean_diff_document_has_no_warnings_key():
+    result = diff.build(_setup_store(0), _setup_store(1))
+    assert "warnings" not in result.as_dict()

@@ -5,6 +5,7 @@ touch?" -- a question no firmware setup screen will answer.
 """
 
 import hashlib
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from . import decode, report
@@ -54,6 +55,7 @@ class Diff:
     settings_compared: int = 0
     old_source: str = ""
     new_source: str = ""
+    warnings: list[str] = field(default_factory=list)
 
     def counts(self) -> dict:
         by_kind = {k: sum(1 for v in self.variables if v.kind == k)
@@ -62,10 +64,13 @@ class Diff:
                 "settings_compared": self.settings_compared}
 
     def as_dict(self) -> dict:
-        return {"old": self.old_source, "new": self.new_source,
-                "counts": self.counts(),
-                "variables": [v.as_dict() for v in self.variables],
-                "settings": [s.as_dict() for s in self.settings]}
+        payload = {"old": self.old_source, "new": self.new_source,
+                   "counts": self.counts(),
+                   "variables": [v.as_dict() for v in self.variables],
+                   "settings": [s.as_dict() for s in self.settings]}
+        if self.warnings:
+            payload["warnings"] = list(self.warnings)
+        return payload
 
     def is_empty(self) -> bool:
         return not self.variables and not self.settings
@@ -124,8 +129,10 @@ def diff_settings(old: list[DecodedSetting],
 
 def build(old_store: VariableStore, new_store: VariableStore,
           old_decoded: list[DecodedSetting] | None = None,
-          new_decoded: list[DecodedSetting] | None = None) -> Diff:
-    result = Diff(old_source=old_store.source, new_source=new_store.source)
+          new_decoded: list[DecodedSetting] | None = None,
+          walk_warnings: Sequence[str] = ()) -> Diff:
+    result = Diff(old_source=old_store.source, new_source=new_store.source,
+                  warnings=list(walk_warnings))
     result.variables = diff_variables(old_store, new_store)
     if old_decoded is not None and new_decoded is not None:
         result.settings, result.settings_compared = diff_settings(old_decoded, new_decoded)
@@ -143,6 +150,10 @@ def to_text(result: Diff, title: str) -> str:
              f"settings       {tally['settings_changed']} changed "
              f"of {tally['settings_compared']} compared",
              ""]
+    if result.warnings:
+        lines.append("[warnings]")
+        lines.extend(f"  {warning}" for warning in result.warnings)
+        lines.append("")
     if result.variables:
         lines.append("[variables]")
         symbol = {ADDED: "+", REMOVED: "-", CHANGED: "~"}
