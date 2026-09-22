@@ -65,7 +65,7 @@ literals, localhost, unapproved hosts, and HTTPS-to-HTTP downgrades. Limits are:
 |---|---:|
 | Metadata body | 4 MiB |
 | Downloaded artifact | 128 MiB |
-| Extracted image | 64 MiB |
+| Extracted image | 128 MiB |
 | Redirects | 5 per request |
 | Resolution requests | 20 |
 | Socket timeout | 15 seconds |

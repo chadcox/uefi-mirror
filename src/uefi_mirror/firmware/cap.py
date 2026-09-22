@@ -12,7 +12,7 @@ import struct
 import uuid
 from dataclasses import dataclass
 
-MAX_IMAGE_BYTES = 64 << 20
+MAX_IMAGE_BYTES = 128 << 20
 CAPSULE_HEADER_MIN = 28
 FV_SIGNATURE = b"_FVH"
 FV_SIGNATURE_OFFSET = 40

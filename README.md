@@ -293,7 +293,7 @@ and image hashes, checksum scope, and parsing results. Successful parsing and a
 verified download checksum do **not** prove that the image is the firmware
 installed on the machine; that status remains `unverified`.
 
-Network limits are 4 MiB metadata, 128 MiB artifact, 64 MiB extracted image,
+Network limits are 4 MiB metadata, 128 MiB artifact, 128 MiB extracted image,
 128 ZIP entries, 256 MiB total advertised ZIP contents, 5 redirects per
 request, 20 resolution requests, a 15-second socket timeout, and a 180-second
 whole-fetch deadline. Only HTTPS on port 443 to the reviewed ASUS metadata and

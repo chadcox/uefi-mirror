@@ -49,6 +49,11 @@ Behavior changes since 1.0.0, pending the next release.
 
 ### Changed
 
+- **Firmware image size limit raised from 64 MiB to 128 MiB.** Some vendor
+  images exceed 64 MiB (Lenovo ThinkPad BIOS N3VET59W ships a 68 MiB image)
+  and were refused before parsing. The limit applies to `schema`, `export`,
+  and `diff` image inputs and to the image `fetch` extracts, and still sits
+  within the existing 128 MiB download and 256 MiB ZIP-contents limits.
 - **Output writes are refused in more cases on Linux.** Output files and
   directories that are (or pass through) symlinks, existing hard-linked files,
   files or directories owned by another user, or destinations resolving under

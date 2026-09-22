@@ -54,6 +54,20 @@ def test_empty_file_is_rejected(tmp_path):
         cap.load(str(path))
 
 
+def test_a_68_mib_image_is_within_the_size_limit():
+    """Lenovo ThinkPad N3VET59W ships a 68 MiB image, which the old 64 MiB
+    limit refused before parsing began."""
+    image = fixtures.build_image()
+    data = image + b"\xff" * ((68 << 20) - len(image))
+    capsule = cap.parse(data, "bios.FL1")
+    assert len(capsule.data) == 68 << 20
+
+
+def test_an_image_over_the_size_limit_is_rejected():
+    with pytest.raises(ValueError, match="byte limit"):
+        cap.parse(b"\xff" * (cap.MAX_IMAGE_BYTES + 1), "huge.bin")
+
+
 def test_walk_finds_the_file_and_its_ui_name():
     files = firmware_volume.walk(fixtures.build_image()).files
     assert len(files) == 1
