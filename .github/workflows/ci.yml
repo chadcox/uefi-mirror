@@ -51,7 +51,7 @@ jobs:
       # creation -- which the synthetic parser fixtures cannot. Hosted runners may
       # restrict firmware-variable access, so this is continue-on-error: it tells
       # us how far the path gets and surfaces any ctypes signature/struct crash,
-      # but real-hardware validation still lives in docs/windows-validation.md.
+      # but the physical release gate remains in docs/release-checklist.md.
       - name: Windows native firmware smoke (diagnostic, non-fatal)
         if: runner.os == 'Windows'
         continue-on-error: true

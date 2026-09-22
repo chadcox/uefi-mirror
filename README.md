@@ -33,6 +33,21 @@ ever performs are the output files and snapshot directories you name on the
 command line, and those go through the two guarded helpers described in
 [`docs/safety.md`](docs/safety.md).
 
+## What's new in 1.1.0
+
+- `fetch` retrieves a reviewed, exact ASUS release and records provenance;
+  `export` checks that record against the image and machine when present.
+- Named `diff` can use a different image or schema for each side of a firmware
+  update. Failed variable reads are reported as unreadable, not as changes.
+- Snapshots can be limited to a saved schema and checked for changes between
+  two reads. Output files are replaced atomically after a successful write.
+- The parser handles EFI standard compression and reports why a visibility
+  condition is undecidable. `--require-complete` refuses parser warnings.
+
+The compression path has synthetic tests but no vendor-image validation yet.
+Physical Windows validation beyond the ASUS reference board remains a release
+gate for any broader support claim. See [1.1.0 changes](CHANGELOG.md) for detail.
+
 ## Who this is for
 
 - **Headless or remote machines.** Read the configuration over ssh. No reboot, no
@@ -207,10 +222,15 @@ $ uefi-mirror snapshot --output after/
 $ uefi-mirror diff before/ after/ --image BIOS.CAP
 ```
 
-The tool never makes the firmware change itself. Named `diff` uses one image or
-schema for both snapshots and refuses a definite mismatch. If an update changed
-the variable layout, omit `--image` for a raw comparison and export each snapshot
-separately with its matching firmware version.
+The tool never makes the firmware change itself. For a firmware update that
+changed the layout, give named `diff` each side's matching image or schema:
+
+```console
+$ uefi-mirror diff before/ after/ --old-image OLD.CAP --new-image NEW.CAP
+```
+
+Settings whose definitions changed are reported as not comparable; the tool
+does not present their differing bytes as the same setting value.
 
 ### 5. Keep the schema, drop the image
 
@@ -332,13 +352,18 @@ Writes every readable variable plus a manifest with sizes, attributes and
 SHA-256. On Linux a destination that is (or passes through) a symlink, is a
 hard-linked file, is owned by another user, or resolves under `/sys/firmware`
 is refused before any write; new files start `0600` and directories `0700`,
-and an existing file is tightened to `0600` through its own open descriptor
-before it is truncated. On Windows the tree is created with a protected,
+and an existing file is tightened to `0600` before a private temporary file
+atomically replaces it. On Windows the tree is created with a protected,
 non-inheriting owner-only DACL that is read back and verified before payload
 bytes are written; junctions and reparse points are refused.
 `docs/safety.md` states the exact guarantees and their limits. Feed it to
 `export --snapshot` or `diff` later. **Do not commit it** — raw variables
 contain boot paths and machine identifiers.
+
+Use `--schema schema.json` to capture only variables referenced by that schema.
+Use `--verify-stable` to read the selected variables twice and refuse a capture
+if their bytes, attributes, or read errors change between sweeps. This detects
+observed drift; it does not make UEFI reads atomic.
 
 ### `schema` — what does each setting *mean*?
 
@@ -364,6 +389,8 @@ hash, so two people can confirm they are reading the same firmware definition.
 
 Feed the result back to `export --schema` or `diff --schema` to work without the
 BIOS image.
+`--require-complete` refuses an image or saved schema when the parser reported
+warnings about content it could not read.
 
 ### `export` — the live configuration, with names
 
@@ -406,13 +433,14 @@ variable GUIDs, minimum sizes, and enum values against the collected variables.
 On Linux, an `--output` destination that is (or passes through) a symlink, a
 hard-linked file, owned by another user, or resolving under `/sys/firmware` is
 refused before any write; new files start `0600` and an existing one is
-tightened to `0600` through its own open descriptor before truncation. On
+tightened to `0600` before an atomic private-file replacement. On
 Windows the file is created with a protected, non-inheriting owner-only DACL
 that is read back and verified before payload bytes are written, and reparse
 points are refused.
 `--grep`, `--changed-only`, `--visible-only`, and `--include-inactive` filter
 terminal and text rows; archival JSON remains complete. HTML embeds every
 setting and uses those flags only as initial UI filters.
+Use `--require-complete` to refuse exports from schemas with parser warnings.
 
 ### `diff` — what changed?
 
@@ -442,6 +470,11 @@ settings without the image, on the same terms as `export --schema`:
 ```console
 $ uefi-mirror diff before/ after/ --schema x870e-2402.json
 ```
+
+For a firmware update, use `--old-image` and `--new-image`, or the paired
+`--old-schema` and `--new-schema` options. A failed variable read is reported
+as `unreadable` rather than as an added or removed variable. `--require-complete`
+refuses schemas with parser warnings.
 
 Without either, it compares raw variable bytes and says only which variables
 moved:
@@ -486,7 +519,10 @@ can see why a value was classified the way it was.
 
 Evaluation is **tri-state**: a condition that reads a question we could not
 decode, or uses an opcode with no static meaning, reports `unknown` rather than
-guessing. 645 settings land there and say so.
+guessing. The export records causes such as a missing question value or an
+unsupported opcode for each unknown result and summarizes their frequency.
+The reference result recorded 645 unknown settings before these additional
+expression evaluations; the current count may be lower.
 
 The image also ships one `AMD CBS` form set per CPU family. `uefi-mirror` works
 out which applies to the installed processor, marks the other 2303 settings
@@ -575,7 +611,8 @@ post-1.0 hardware validation, not 1.0 support claims.
 | MSI MS-7E54, firmware 2.A90 | Parsed: 9511 settings/10 form sets; hardware unverified |
 | Other AMI Aptio images | Expected, not verified |
 | Insyde/Phoenix images | Unverified |
-| Tiano/EFI-1.1 compressed sections | Unsupported |
+| EFI standard compression sections (type `0x01`) | Decoder implemented with bounded synthetic tests; vendor-image validation pending |
+| Unknown GUID compression | Reported as a parser warning; content is skipped |
 
 ### Automatic retrieval examples
 
@@ -620,8 +657,9 @@ exact-version, path, checksum, container, and parser gates described above.
 
 - **Visibility cannot always be determined.** Some firmware conditions depend
   on values or operations that cannot be evaluated safely. These settings are
-  reported as `unknown`, never guessed. On the reference firmware, this affects
-  645 of 3073 applicable settings.
+  reported as `unknown`, never guessed. The 1.0 reference export recorded
+  645 of 3073 applicable settings as unknown; newer expression evaluation may
+  reduce that count.
 
 - **Some menu paths may be incomplete.** Firmware sometimes links menu pages in
   ways the parser does not yet follow. On the reference firmware, 29 of 5376

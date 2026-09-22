@@ -4,10 +4,29 @@ All notable changes to `uefi-mirror` are documented here.
 
 ## Unreleased
 
-Behavior changes since 1.0.0, pending the next release.
+No changes yet.
+
+## 1.1.0 - 2026-09-22
 
 ### Added
 
+- **Cross-version named diff.** `diff` accepts paired `--old-image`/`--new-image`
+  or `--old-schema`/`--new-schema` sources, compares stable setting IDs, and
+  reports settings whose definitions changed instead of comparing unlike bytes.
+- **Snapshot scope and stability options.** `snapshot --schema` captures only
+  declared variables. `--verify-stable` compares two reads before writing and
+  refuses observed drift; it cannot make firmware reads atomic.
+- **Parser completeness control.** `schema`, `export`, and `diff` accept
+  `--require-complete` to refuse schemas with parser warnings.
+- **EFI standard compression decoding.** Type `0x01` sections now use a bounded
+  decoder. Synthetic and malformed-stream tests pass; vendor-image validation
+  of this path is pending. Unknown GUID compression still produces warnings.
+- **Visibility diagnostics.** Unknown visibility results include per-setting
+  causes and an export summary. Safe `THIS` and additional IFR operations are
+  evaluated when their inputs are available.
+- **Windows physical release gate.** The tracked release checklist now states
+  how to validate another physical board before claiming broader Windows
+  support; that result is still pending.
 - **Capability-based official ASUS retail-motherboard retrieval.** The opt-in
   `fetch` command now has capability-based support for exact ASUS
   retail-motherboard models exposed by the reviewed endpoint, rather than a
@@ -23,7 +42,7 @@ Behavior changes since 1.0.0, pending the next release.
 - **Fetch provenance format 2.** Resolve-only output records an advertised
   checksum target as `undetermined`; a successful verified download records the
   target discovered from the bytes as `artifact` or `image`. Snapshot remains
-  format 1 and schema/export remain format 3; package version remains 1.0.0.
+  format 1 and schema/export remain format 3.
   `--snapshot`, explicit identity/version overrides, `--resolve-only`, and
   clean JSON output remain supported.
 - **Fetch provenance check in `export`.** Compares a download `fetch.json`
@@ -52,6 +71,11 @@ Behavior changes since 1.0.0, pending the next release.
 
 ### Changed
 
+- **Private output replacement is atomic per file.** A failed payload write
+  leaves an existing report intact. Windows output paths now check ancestor
+  reparse points as well as the final component.
+- **`probe` checks live enumeration.** It reports a next step and calls a
+  collection ready only when at least one variable is readable.
 - **Firmware image size limit raised from 64 MiB to 128 MiB.** Some vendor
   images exceed 64 MiB (Lenovo ThinkPad BIOS N3VET59W ships a 68 MiB image)
   and were refused before parsing. The limit applies to `schema`, `export`,
@@ -62,7 +86,7 @@ Behavior changes since 1.0.0, pending the next release.
   files or directories owned by another user, or destinations resolving under
   `/sys/firmware` (including symlink aliases and `..` traversal) are refused
   before any mutation. Existing output files are tightened to `0600` (output
-  directories to `0700`) through their own open descriptor before truncation,
+  directories to `0700`) through their own open descriptor before replacement,
   so a pre-existing world-readable file is never briefly writable by others.
   New files and directories start with those private permissions on both
   platforms.
@@ -83,6 +107,9 @@ Behavior changes since 1.0.0, pending the next release.
 
 ### Fixed
 
+- **Unreadable variables in diffs.** A failed read is reported as `unreadable`,
+  never as an added or removed variable. Named diffs report material settings
+  they could not compare.
 - **`probe` reports the fwupd version.** fwupd 2.x prints its dependencies
   first, so the optional-tools row showed libusb's version
   (`info.libusb 1.0.30`) as fwupd's. It now shows the `org.freedesktop.fwupd`

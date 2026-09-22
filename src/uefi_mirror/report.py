@@ -5,7 +5,7 @@ import html
 import json
 
 from . import __version__
-from .decode import OK, VISIBLE, DecodedSetting, VariableStore
+from .decode import OK, UNKNOWN, VISIBLE, DecodedSetting, VariableStore
 from .schema.model import Schema
 
 EXPORT_FORMAT_VERSION = 3
@@ -152,7 +152,7 @@ function detailsFor(parent, s) {
   pair(sd,'Kind',v.kind); pair(sd,'Offset',v.offset === null || v.offset === undefined ? null : hex(v.offset));
   pair(sd,'Size',v.size); pair(sd,'Attributes',v.attributes === null || v.attributes === undefined ? null : hex(v.attributes));
   pair(sd,'Decode status',live.status); pair(sd,'Decode explanation',live.status === 'ok' ? 'Decoded successfully' : live.display);
-  pair(sd,'Visibility',live.visibility); pair(sd,'Question conditions',conditionsText(s.conditions));
+  pair(sd,'Visibility',live.visibility); pair(sd,'Unknown visibility causes',(live.visibility_reasons || []).join(', ')); pair(sd,'Question conditions',conditionsText(s.conditions));
   pair(sd,'Evaluated result',live.visibility); pair(sd,'Variant state',live.active ? 'Active' : 'Inactive');
   const fs=formsets.get(s.formset_guid) || {}; pair(sd,'Variant evidence',fs.inactive_reason ||
     ((doc.variants && doc.variants.evidence || []).join('; ') || 'No variant exclusion evidence'));
@@ -266,15 +266,21 @@ def counts(decoded: list[DecodedSetting]) -> dict:
     for item in decoded:
         by_status[item.status] = by_status.get(item.status, 0) + 1
     by_visibility: dict[str, int] = {}
+    unknown_causes: dict[str, int] = {}
     for item in decoded:
         if item.active:
             by_visibility[item.visibility] = by_visibility.get(item.visibility, 0) + 1
+            if item.visibility == UNKNOWN:
+                for reason in item.visibility_reasons:
+                    category = reason.split(" 0x", 1)[0]
+                    unknown_causes[category] = unknown_causes.get(category, 0) + 1
     return {
         "total": len(decoded),
         "by_status": dict(sorted(by_status.items())),
         "changed_from_default": sum(1 for d in decoded if is_changed(d)),
         "active": sum(1 for d in decoded if d.active),
         "by_visibility": dict(sorted(by_visibility.items())),
+        "unknown_visibility_causes": dict(sorted(unknown_causes.items())),
         "changed_and_visible": sum(1 for d in decoded if is_changed(d)
                                    and d.active and d.visibility == VISIBLE),
     }
@@ -334,6 +340,11 @@ def to_text(document: dict, decoded: list[DecodedSetting], title: str) -> str:
             in document["counts"]["by_visibility"].items()),
         "",
     ]
+    causes = document["counts"].get("unknown_visibility_causes", {})
+    if causes:
+        common = sorted(causes.items(), key=lambda pair: (-pair[1], pair[0]))[:5]
+        lines.extend(["unknown causes " + ", ".join(
+            f"{name} ({count})" for name, count in common), ""])
 
     warnings = document.get("warnings") or []
     if warnings:

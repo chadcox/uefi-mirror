@@ -61,6 +61,7 @@ class VariableStore:
     attributes: dict[tuple[str, str], int | None] = field(default_factory=dict)
     source: str = ""
     errors: list[str] = field(default_factory=list)
+    failed: dict[tuple[str, str], str] = field(default_factory=dict)
     platform: dict = field(default_factory=dict)
     kind: str = ""
 
@@ -86,6 +87,7 @@ def from_variables(variables: list[efivarfs.Variable], source: str,
     for var in variables:
         if var.payload is None:
             store.errors.append(f"{var.filename}: {var.error}")
+            store.failed[(var.name, var.guid.lower())] = var.error or "unreadable"
             continue
         store.payloads[(var.name, var.guid)] = var.payload
         store.attributes[(var.name, var.guid)] = var.attributes
@@ -157,6 +159,7 @@ def from_snapshot(directory: str) -> VariableStore:
             if os.path.lexists(path):
                 raise ValueError(f"{prefix}: failed capture unexpectedly has a payload")
             store.errors.append(f"{filename}: {error}")
+            store.failed[key] = error
             continue
 
         size, digest = entry.get("payload_size"), entry.get("payload_sha256")
@@ -288,6 +291,7 @@ class DecodedSetting:
     option_states: list[str] = field(default_factory=list)
     is_default: bool | None = None
     visibility: str = UNKNOWN
+    visibility_reasons: list[str] = field(default_factory=list)
     active: bool = True
 
     @property
@@ -318,6 +322,8 @@ class DecodedSetting:
                        "candidate_labels": self.candidate_labels,
                        "display": self.display_value,
                        "visibility": self.visibility, "active": self.active}
+        if self.visibility_reasons:
+            out["live"]["visibility_reasons"] = self.visibility_reasons
         return out
 
 
@@ -529,25 +535,28 @@ def evaluate_visibility(decoded: list[DecodedSetting]) -> None:
 
     for item in decoded:
         resolver = resolvers.get(item.setting.formset_guid, empty)
+        item_resolver = _QuestionValues(resolver.values, item.raw_value)
         outcome = VISIBLE
         undecided = False
+        reasons: set[str] = set()
         for condition in item.setting.conditions:
-            result = expr.evaluate(condition.code, resolver)
+            result = expr.evaluate(condition.code, item_resolver)
             if result is None:
                 undecided = True
+                reasons.update(expr.unknown_causes(condition.code, item_resolver))
             elif result:
                 candidate = _CONDITION_RESULT.get(condition.kind, VISIBLE)
                 if _VISIBILITY_RANK[candidate] > _VISIBILITY_RANK[outcome]:
                     outcome = candidate
         # An undecidable condition only matters if nothing else already hid it.
         item.visibility = UNKNOWN if undecided and outcome == VISIBLE else outcome
+        item.visibility_reasons = sorted(reasons) if item.visibility == UNKNOWN else []
 
         item.option_states = []
         for option in item.setting.options:
             state = VISIBLE
-            option_resolver = _QuestionValues(resolver.values, item.raw_value)
             for condition in option.conditions:
-                result = expr.evaluate(condition.code, option_resolver)
+                result = expr.evaluate(condition.code, item_resolver)
                 if result is True:
                     state = HIDDEN
                     break

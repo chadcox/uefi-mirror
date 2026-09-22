@@ -13,6 +13,7 @@ import stat
 import time
 import urllib.error
 import urllib.request
+import uuid
 from dataclasses import dataclass, field
 from urllib.parse import urljoin, urlsplit
 
@@ -245,8 +246,8 @@ FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000
 FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
 FILE_SHARE_READ = 1
 FILE_SHARE_WRITE = 2
-OPEN_ALWAYS = 4
 OPEN_EXISTING = 3
+CREATE_NEW = 1
 GENERIC_READ = 0x80000000
 GENERIC_WRITE = 0x40000000
 FILE_ATTRIBUTE_TAG_INFO_CLASS = 9
@@ -533,6 +534,24 @@ def _windows_fd(path: str, access: int, disposition: int, flags: int) -> int:
         raise
 
 
+def _windows_safe_parents(path: str) -> None:
+    """Refuse existing junctions and reparse points above an output path."""
+    drive, tail = os.path.splitdrive(os.path.dirname(os.path.abspath(path)))
+    current = drive + os.sep
+    for part in tail.split(os.sep):
+        if not part:
+            continue
+        current = os.path.join(current, part)
+        if not os.path.lexists(current):
+            break
+        if os.path.islink(current) or os.path.isjunction(current):
+            raise PermissionError(f"{path}: output path contains a reparse point")
+        if not os.path.isdir(current):
+            raise PermissionError(f"{path}: output path contains a non-directory")
+        handle = _open_windows_handle(current, 0, OPEN_EXISTING, directory=True)
+        _close_windows_handle(handle)
+
+
 def read_bounded(path: str, limit: int = MAX_VARIABLE_BYTES) -> bytes:
     """Open O_RDONLY|O_NOFOLLOW|O_CLOEXEC and read at most `limit` bytes.
 
@@ -670,6 +689,7 @@ def private_dir(path: str) -> str:
     existing one is re-tightened to 0700 through its own descriptor.
     """
     if WINDOWS:
+        _windows_safe_parents(path)
         # Create the sensitive directory itself with the owner-only descriptor in
         # place (no inherited-DACL window). Non-sensitive ancestors may pre-exist
         # or be made normally; ERROR_ALREADY_EXISTS means a prior step made it and
@@ -677,6 +697,7 @@ def private_dir(path: str) -> str:
         parent = os.path.dirname(os.path.normpath(path))
         if parent and not os.path.isdir(parent):
             os.makedirs(parent, exist_ok=True)
+        _windows_safe_parents(path)
         sec_attr, _keep = _private_security_attributes(_token_user_sid())
         create_dir = _dll("kernel32").CreateDirectoryW
         create_dir.argtypes = [ctypes.c_wchar_p, ctypes.c_void_p]
@@ -725,42 +746,77 @@ def private_dir(path: str) -> str:
 def write_private(path: str, data: bytes) -> None:
     """Write `data` to `path` with owner-only permissions, safely.
 
-    POSIX: the file is opened without truncation and the descriptor is
-    inspected before any permission or content change - the destination must
-    not resolve under /sys/firmware, no directory in its path may be a symlink
-    (checked with a no-follow walk anchored to a parent descriptor), and the
-    opened object must be a regular, non-hard-linked file owned by the caller.
-    Only then is it fchmod'd 0600 (closing the 0644 overwrite window) and
-    truncated through the same descriptor. A final-component symlink raises
-    ELOOP at open.
+    Validate an existing destination, write a private file beside it, then
+    replace it only after the full payload is written. POSIX operations are
+    anchored to a no-follow parent descriptor; Windows files are created with
+    an owner-only DACL before any payload write.
     """
     if WINDOWS:
-        fd = _windows_fd(path, GENERIC_WRITE, OPEN_ALWAYS, os.O_WRONLY)
+        _windows_safe_parents(path)
         try:
-            _set_windows_private_acl(path)
-            os.ftruncate(fd, 0)
-            _write_all(fd, data)
+            existing = _windows_fd(path, GENERIC_WRITE, OPEN_EXISTING, os.O_WRONLY)
+        except FileNotFoundError:
+            existing = None
+        if existing is not None:
+            try:
+                st = os.fstat(existing)
+                if not stat.S_ISREG(st.st_mode) or st.st_nlink > 1:
+                    raise PermissionError(f"{path}: not a regular, singly linked file")
+                _set_windows_private_acl(path)
+            finally:
+                os.close(existing)
+        temp = os.path.join(os.path.dirname(os.path.abspath(path)),
+                            f".uefi-mirror-{uuid.uuid4().hex}.tmp")
+        fd = _windows_fd(temp, GENERIC_WRITE, CREATE_NEW, os.O_WRONLY)
+        try:
+            try:
+                _set_windows_private_acl(temp)
+                _write_all(fd, data)
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            _windows_safe_parents(path)
+            os.replace(temp, path)
         finally:
-            os.close(fd)
+            if os.path.exists(temp):
+                os.unlink(temp)
         return
     _refuse_protected_root(path)
     name = os.path.basename(os.path.normpath(path))
     parent_fd = _nofollow_parent_fd(path)
     try:
-        fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC,
-                     0o600, dir_fd=parent_fd)
+        try:
+            existing = os.open(name, os.O_WRONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                               dir_fd=parent_fd)
+        except FileNotFoundError:
+            existing = None
+        if existing is not None:
+            try:
+                st = os.fstat(existing)
+                if not stat.S_ISREG(st.st_mode):
+                    raise PermissionError(f"{path}: not a regular file; refusing to write")
+                if st.st_nlink > 1:
+                    raise PermissionError(f"{path}: hard-linked; refusing to write")
+                if st.st_uid != os.getuid():
+                    raise PermissionError(f"{path}: owned by another user; refusing to write")
+                os.fchmod(existing, 0o600)
+            finally:
+                os.close(existing)
+        temp = f".uefi-mirror-{uuid.uuid4().hex}.tmp"
+        fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+                     | os.O_CLOEXEC, 0o600, dir_fd=parent_fd)
+        try:
+            try:
+                os.fchmod(fd, 0o600)
+                _write_all(fd, data)
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            os.replace(temp, name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        finally:
+            try:
+                os.unlink(temp, dir_fd=parent_fd)
+            except FileNotFoundError:
+                pass
     finally:
         os.close(parent_fd)
-    try:
-        st = os.fstat(fd)
-        if not stat.S_ISREG(st.st_mode):
-            raise PermissionError(f"{path}: not a regular file; refusing to write")
-        if st.st_nlink > 1:
-            raise PermissionError(f"{path}: hard-linked; refusing to write")
-        if st.st_uid != os.getuid():
-            raise PermissionError(f"{path}: owned by another user; refusing to write")
-        os.fchmod(fd, 0o600)
-        os.ftruncate(fd, 0)
-        _write_all(fd, data)
-    finally:
-        os.close(fd)

@@ -137,6 +137,59 @@ def test_diff_can_name_settings_from_a_schema_file(tmp_path, image):
     assert "named settings changed" in result.output
 
 
+def test_diff_accepts_one_schema_per_side_and_reports_changed_meaning(tmp_path, image):
+    old = _snapshot(tmp_path / "a")
+    new = _snapshot(tmp_path / "b", bytes([1]) + bytes(0xFF))
+    old_schema = _schema_file(tmp_path, image)
+    new_schema = tmp_path / "new-schema.json"
+    data = json.loads(old_schema.read_text())
+    data["settings"][0]["varstore"]["offset"] += 1
+    new_schema.write_text(json.dumps(data))
+    output = tmp_path / "diff.json"
+    result = runner.invoke(app, ["diff", str(old), str(new),
+                                 "--old-schema", str(old_schema),
+                                 "--new-schema", str(new_schema),
+                                 "--output", str(output), "--format", "json"])
+    assert result.exit_code == 0, result.output
+    document = json.loads(output.read_text())["diff"]
+    changed_ids = {item["id"] for item in document["settings_uncompared"]
+                   if item["reason"] == "schema_changed"}
+    assert changed_ids
+    assert not any(item["name"] == data["settings"][0]["name"]
+                   for item in document["settings"])
+
+
+def test_diff_requires_both_side_specific_schema_sources(tmp_path, image):
+    schema = _schema_file(tmp_path, image)
+    result = runner.invoke(app, ["diff", "old", "new", "--old-schema", str(schema)])
+    assert result.exit_code != 0
+    assert "both old and new" in result.output
+
+
+def test_diff_require_complete_rejects_schema_warnings_before_snapshots(tmp_path, image):
+    schema = _schema_file(tmp_path, image)
+    data = json.loads(schema.read_text())
+    data["warnings"] = ["dropped section"]
+    schema.write_text(json.dumps(data))
+    result = runner.invoke(app, ["diff", "missing-old", "missing-new",
+                                 "--schema", str(schema), "--require-complete"])
+    assert result.exit_code != 0
+    assert "incomplete parser/schema" in result.output
+
+
+def test_diff_shared_schema_warning_is_not_duplicated_in_json(tmp_path, image):
+    schema = _schema_file(tmp_path, image)
+    data = json.loads(schema.read_text())
+    data["warnings"] = ["dropped section"]
+    schema.write_text(json.dumps(data))
+    output = tmp_path / "diff.json"
+    result = runner.invoke(app, ["diff", str(_snapshot(tmp_path / "a")),
+                                 str(_snapshot(tmp_path / "b")), "--schema", str(schema),
+                                 "--output", str(output), "--format", "json"])
+    assert result.exit_code == 0, result.output
+    assert json.loads(output.read_text())["diff"]["warnings"] == ["dropped section"]
+
+
 def test_diff_marks_a_change_the_setup_menu_would_not_show(tmp_path, image):
     """A value that moved while the firmware suppresses its question is the
     interesting case -- nobody could have made that change from the menu -- so

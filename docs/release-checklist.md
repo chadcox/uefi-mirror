@@ -85,5 +85,21 @@ are covered by the repository or the recorded reference-system validation.
   matching firmware image before claiming support for either platform.
 - [ ] Validate physical Windows collection on at least one additional board.
 
+### Next Windows support release gate
+
+Do not claim broader physical Windows support in a release until the preceding
+item is checked with evidence from a second UEFI board. The hosted Windows CI
+smoke remains diagnostic because runner firmware access is not guaranteed.
+
+On that board, record the model, firmware version, Windows build, `probe`
+capability, variable count, and any per-variable errors. From an elevated
+terminal, run `probe`, capture `snapshot --output before/`, decode it with the
+matching image using `export IMAGE --snapshot before/ --output before.json`,
+change one known non-sensitive setup setting in firmware, then capture
+`snapshot --output after/` and run `diff before/ after/ --image IMAGE`. Confirm
+that enumeration succeeds, the export has no definite compatibility mismatch,
+and the named diff identifies the changed setting. Record counts and conclusions
+here; do not commit the raw snapshots or machine-specific export.
+
 Cross-vendor items are follow-up coverage rather than 1.0 blockers. The
 before/after diff and clean-build checks remain release gates.

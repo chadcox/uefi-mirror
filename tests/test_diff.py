@@ -1,8 +1,11 @@
 """Comparing two configurations. A diff that misses a change, or invents one,
 is worse than no diff at all."""
 
+import copy
+
 from tests import fixtures
 from uefi_mirror import decode, diff
+from uefi_mirror.collectors.efivarfs import Variable
 from uefi_mirror.firmware import firmware_volume
 from uefi_mirror.schema import builder
 
@@ -43,6 +46,19 @@ def test_a_resized_variable_counts_the_missing_tail():
     assert change.differing_bytes == 2
 
 
+def test_a_failed_read_is_never_reported_as_an_addition_or_removal():
+    failed = decode.from_variables([
+        Variable("Setup", GUID, f"Setup-{GUID}", error="permission denied")],
+        "test", "efivarfs")
+    before = _store(Setup=b"\x01")
+    for old, new in ((before, failed), (failed, before)):
+        change, = diff.diff_variables(old, new)
+        assert change.kind == diff.UNREADABLE
+        assert change.old_error or change.new_error
+        assert diff.build(old, new).counts()["variables"][diff.REMOVED] == 0
+        assert diff.build(old, new).counts()["variables"][diff.ADDED] == 0
+
+
 def _setup_store(value: int) -> decode.VariableStore:
     payload = bytearray(0x100)
     payload[0x90] = value
@@ -72,6 +88,16 @@ def test_an_unchanged_setting_is_compared_but_not_reported():
     assert result.settings_compared == 1
 
 
+def test_identical_non_decodable_settings_do_not_invent_a_difference():
+    schema = builder.build({}, firmware_volume.walk(fixtures.build_image()).files)
+    store = decode.VariableStore(source="test")
+    decoded = decode.decode_all(schema.settings, store)
+    result = diff.build(store, store, decoded, decoded)
+    assert result.settings_uncompared == []
+    assert result.settings_compared == 0
+    assert result.is_empty()
+
+
 def test_a_setting_that_failed_to_decode_is_not_called_unchanged():
     """Missing on one side means uncomparable; silently reporting 'no change'
     would hide exactly the case the user cares about."""
@@ -81,6 +107,31 @@ def test_a_setting_that_failed_to_decode_is_not_called_unchanged():
                         absent, _decoded(schema, 1))
     assert result.settings == []
     assert result.settings_compared == 0
+
+
+def test_a_failed_setting_read_is_explicitly_uncomparable():
+    schema = builder.build({}, firmware_volume.walk(fixtures.build_image()).files)
+    old = _setup_store(0)
+    new = decode.from_variables([
+        Variable("Setup", GUID, f"Setup-{GUID}", error="permission denied")],
+        "test", "efivarfs")
+    result = diff.build(old, new, decode.decode_all(schema.settings, old),
+                        decode.decode_all(schema.settings, new))
+    assert result.settings == []
+    assert result.settings_compared == 0
+    assert result.settings_uncompared[0].reason == diff.UNREADABLE
+    assert not result.is_empty()
+
+
+def test_same_setting_id_with_a_new_storage_location_is_not_compared():
+    schema = builder.build({}, firmware_volume.walk(fixtures.build_image()).files)
+    old_decoded = _decoded(schema, 0)
+    new_decoded = copy.deepcopy(_decoded(schema, 1))
+    new_decoded[0].setting.varstore.offset += 1
+    result = diff.build(_setup_store(0), _setup_store(1), old_decoded, new_decoded)
+    assert result.settings == []
+    assert result.settings_compared == 0
+    assert result.settings_uncompared[0].reason == "schema_changed"
 
 
 def test_text_rendering_is_plain_and_mentions_both_sides():
@@ -98,6 +149,13 @@ def test_json_rendering_round_trips():
     store = _store(Setup=b"\x01")
     payload = json.loads(diff.to_json(diff.build(store, _store(Setup=b"\x02"))))
     assert payload["diff"]["counts"]["variables"]["changed"] == 1
+
+
+def test_changed_setting_json_carries_stable_id():
+    schema = builder.build({}, firmware_volume.walk(fixtures.build_image()).files)
+    result = diff.build(_setup_store(0), _setup_store(1),
+                        _decoded(schema, 0), _decoded(schema, 1))
+    assert result.as_dict()["settings"][0]["id"] == schema.settings[0].id
 
 
 def test_inactive_variant_change_is_raw_only():

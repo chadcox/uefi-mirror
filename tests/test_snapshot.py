@@ -2,8 +2,10 @@ import hashlib
 import json
 import os
 import subprocess
+from types import SimpleNamespace
 
 import pytest
+from typer.testing import CliRunner
 
 from tests import fixtures
 from uefi_mirror import cli, decode, platform
@@ -92,6 +94,7 @@ def test_missing_payload_is_allowed_only_for_collection_error(tmp_path):
     store = decode.from_snapshot(str(tmp_path))
     assert store.payloads == {}
     assert store.errors
+    assert store.failed == {("Setup", GUID): "permission denied"}
 
 
 def _boom(*_args, **_kwargs):
@@ -139,3 +142,40 @@ def test_windows_live_store_dispatches_to_windows_collector(monkeypatch):
     fixture_store = cli._live_store("fixture-efivars")
     assert fixture_store.source == "fixture-efivars"
     assert fixture_store.kind == "efivarfs"
+
+
+def _live_variable(name, payload):
+    var = Variable(name, GUID, f"{name}-{GUID}", attributes=7, payload=payload)
+    var.size = len(payload)
+    var.payload_sha256 = hashlib.sha256(payload).hexdigest()
+    return var
+
+
+def test_snapshot_schema_scope_captures_only_declared_variables(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "_live_variables", lambda _: [
+        _live_variable("Setup", b"one"), _live_variable("Other", b"two")])
+    monkeypatch.setattr(cli, "_load_schema", lambda *_: (
+        SimpleNamespace(settings=[SimpleNamespace(varstore=SimpleNamespace(name="Setup",
+                                                                        guid=GUID))]),
+        None, ""))
+    monkeypatch.setattr(platform, "summary", lambda: {})
+    target = tmp_path / "scoped"
+    result = CliRunner().invoke(cli.app, ["snapshot", "-o", str(target),
+                                          "--schema", "schema.json"])
+    assert result.exit_code == 0, result.output
+    store = decode.from_snapshot(str(target))
+    assert store.get("Setup", GUID) == b"one"
+    assert store.get("Other", GUID) is None
+    assert json.loads((target / "manifest.json").read_text())["selection"] == "schema"
+
+
+def test_snapshot_verify_stable_refuses_a_changed_variable_before_output(tmp_path, monkeypatch):
+    captures = iter(([_live_variable("Setup", b"before")],
+                     [_live_variable("Setup", b"after")]))
+    monkeypatch.setattr(cli, "_live_variables", lambda _: next(captures))
+    target = tmp_path / "unstable"
+    result = CliRunner().invoke(cli.app, ["snapshot", "-o", str(target),
+                                          "--verify-stable"])
+    assert result.exit_code != 0
+    assert "changed during capture" in result.output
+    assert not target.exists()

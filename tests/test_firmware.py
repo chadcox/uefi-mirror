@@ -8,7 +8,7 @@ import fixtures
 import pytest
 
 from uefi_mirror import decode, report
-from uefi_mirror.firmware import cap, firmware_volume, hii, ifr
+from uefi_mirror.firmware import cap, efi_compression, firmware_volume, hii, ifr
 from uefi_mirror.firmware.strings import parse_string_package
 from uefi_mirror.schema import builder
 from uefi_mirror.schema.model import OptionValue, Setting, VarStoreRef
@@ -544,6 +544,48 @@ def test_an_unknown_decompressor_guid_warns_with_its_guid():
     (warning,) = result.warnings
     assert "unknown decompressor GUID" in warning
     assert str(guid) in warning
+
+
+def test_efi_standard_compression_unwraps_literals_and_back_references():
+    """Two constant-code blocks decode A, then copy three preceding bytes."""
+    def block(symbol: int, count: int) -> str:
+        return (f"{count:016b}" + "00000" + "00000" + "000000000"
+                + f"{symbol:09b}" + "0000" + "0000")
+
+    leaf = b"AAAA"
+    # The decompressed bytes are a section list, not a bare payload.
+    section = fixtures.build_section(0x03, leaf)
+    stream_bits = "".join(block(byte, 1) for byte in section[:-3]) + block(256, 1)
+    stream = int(stream_bits.ljust((len(stream_bits) + 7) // 8 * 8, "0"), 2).to_bytes(
+        (len(stream_bits) + 7) // 8, "big")
+    compressed = struct.pack("<II", len(stream), len(section)) + stream
+    wrapper = fixtures.build_section(
+        0x01, struct.pack("<I", len(section)) + b"\x01" + compressed)
+    result = firmware_volume.walk(fixtures.build_firmware_volume(
+        fixtures.build_ffs_file(wrapper)))
+    assert result.warnings == []
+    assert result.files[0].sections[0].data == leaf
+
+
+def test_efi_standard_compression_rejects_an_output_over_budget(monkeypatch):
+    monkeypatch.setattr(firmware_volume, "MAX_SECTION_OUTPUT", 4)
+    wrapper = fixtures.build_section(
+        0x01, struct.pack("<I", 8) + b"\x01" + struct.pack("<II", 1, 8) + b"\x00")
+    result = firmware_volume.walk(fixtures.build_firmware_volume(
+        fixtures.build_ffs_file(wrapper)))
+    assert result.files[0].sections == []
+    assert any("budget exceeded" in warning for warning in result.warnings)
+
+
+def test_efi_standard_compression_decodes_a_nontrivial_huffman_table():
+    # A singleton extra-code table supplies two length-one character codes.
+    bits = (f"{2:016b}" + "00000" + f"{3:05b}" + f"{2:09b}"
+            + "0000" + "0000" + "01")
+    stream = int(bits.ljust((len(bits) + 7) // 8 * 8, "0"), 2).to_bytes(
+        (len(bits) + 7) // 8, "big")
+    assert efi_compression.decompress(struct.pack("<II", len(stream), 2) + stream, 2) == b"\0\1"
+    assert efi_compression.decompress(struct.pack("<II", len(stream), 2) + stream, 1) is None
+    assert efi_compression.decompress(b"\x00" * 8, 2) == b""
 
 
 def test_encapsulation_beyond_the_depth_cap_warns_and_keeps_the_leaf():

@@ -2,10 +2,10 @@
 form set applies. Both decide what a user is told about their own machine."""
 
 from tests import fixtures
-from uefi_mirror import decode
+from uefi_mirror import decode, report
 from uefi_mirror.firmware import firmware_volume
 from uefi_mirror.schema import builder
-from uefi_mirror.schema.model import FormSetSummary
+from uefi_mirror.schema.model import ConditionRef, FormSetSummary
 
 
 def _schema():
@@ -44,6 +44,21 @@ def test_visibility_is_unknown_when_the_governing_value_cannot_be_read():
     schema = _schema()
     decoded = _by_name(decode.decode_all(schema.settings, decode.VariableStore(source="t")))
     assert decoded["Dependent Option"].visibility == decode.UNKNOWN
+    assert any("missing question" in reason
+               for reason in decoded["Dependent Option"].visibility_reasons)
+    assert report.counts(list(decoded.values()))["unknown_visibility_causes"]["missing question"]
+
+
+def test_this_condition_uses_its_own_value_and_stays_unknown_if_unreadable():
+    schema = _schema()
+    setting = next(s for s in schema.settings if s.name == "Master Switch")
+    setting.conditions.append(ConditionRef(
+        "suppress_if", "THIS == 1", bytes([0x58, 2, 0x53, 2, 0x2F, 2])))
+    for value, expected in ((0, decode.VISIBLE), (1, decode.HIDDEN)):
+        item = _by_name(decode.decode_all(schema.settings, _store(master=value)))
+        assert item["Master Switch"].visibility == expected
+    missing = _by_name(decode.decode_all(schema.settings, decode.VariableStore()))
+    assert missing["Master Switch"].visibility == decode.UNKNOWN
 
 
 def test_the_hidden_setting_is_still_exported_with_its_value():

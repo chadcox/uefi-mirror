@@ -20,6 +20,10 @@ Schema JSON, snapshot manifests, export JSON, and fetch documents carry their ow
   serialize/reload round trip with the same tool version.
 
 Snapshot format is 1, schema/export format is 3, and fetch format is 2.
+Snapshot manifests may add `selection` (`all` or `schema`) and
+`stable_verified` fields. A scoped snapshot remains a valid snapshot but
+contains only variables declared by the selected schema; two agreeing reads
+do not make firmware capture atomic.
 Snapshots and exports can contain machine identifiers or boot paths and should
 be treated as private. Fetch provenance contains selected and available DMI
 identity plus source URLs and hashes, but no raw firmware variables. Schema JSON
@@ -32,6 +36,16 @@ document carries those notes as an additive `warnings` array inside its
 `diff` object, present only when non-empty, so a partially readable image
 says so in every report built from it. A fully readable image produces no
 walk warnings; readers that predate the diff field ignore it.
+`--require-complete` on `schema`, `export`, and `diff` refuses a schema with any
+parser warning. Without that option, warnings remain visible in output.
+
+Diff format 3 may include `unreadable` in variable-change kinds and an additive
+`settings_uncompared` list with reasons when named settings cannot safely be
+compared across captures or schema versions. These entries are not counted as
+changed values. An unreadable variable is never presented as added or removed.
+Export format 3 may include `live.visibility_reasons` on settings whose
+visibility is unknown and `counts.unknown_visibility_causes` as a summary.
+These are diagnostic hints; an undecidable condition remains `unknown`.
 
 Fetch format 2 publishes the scope established by checksum validation:
 

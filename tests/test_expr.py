@@ -17,6 +17,9 @@ class Values(expr.Resolver):
     def question_value(self, question_id):
         return self.values.get(question_id)
 
+    def string(self, string_id):
+        return {7: "Setup"}.get(string_id)
+
 
 def ev(code: bytes, resolver=None):
     return expr.evaluate(code, resolver or expr.Resolver())
@@ -104,6 +107,23 @@ def test_conditional_selects_a_branch():
 
 def test_raw_expression_value_is_available_for_nested_defaults():
     assert expr.evaluate_value(_op(0x43, struct.pack("<H", 0x1234)), expr.Resolver()) == 0x1234
+
+
+def test_dynamic_references_and_string_length_use_known_values():
+    values = Values(q0x1234=1)
+    assert ev(_op(0x43, struct.pack("<H", 0x1234)) + _op(0x41), values) is True
+    code = uint8(7) + _op(0x4F) + _op(0x56) + uint8(5) + _op(0x2F)
+    assert ev(code, values) is True
+    assert ev(uint8(8) + _op(0x4F) + _op(0x56), values) is None
+
+
+def test_unknown_causes_name_missing_inputs_and_unsupported_operations():
+    missing = eq_id_val(0x1234, 1)
+    assert expr.unknown_causes(missing, Values()) == ["missing question 0x1234"]
+    assert expr.unknown_causes(_op(0x28), Values()) == ["runtime state opcode 0x28"]
+    assert expr.unknown_causes(uint8(1) + _op(0x49), Values()) == [
+        "unsupported opcode 0x49"]
+    assert expr.unknown_causes(TRUE, Values()) == []
 
 
 @pytest.mark.parametrize("code", [

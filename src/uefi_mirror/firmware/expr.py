@@ -33,6 +33,9 @@ OP_THIS = 0x58
 OP_DUP = 0x57
 OP_CONDITIONAL = 0x50
 OP_STRING_REF1 = 0x4E
+OP_STRING_REF2 = 0x4F
+OP_QUESTION_REF2 = 0x41
+OP_LENGTH = 0x56
 
 UINT64_MASK = (1 << 64) - 1
 MAX_STACK = 128
@@ -150,6 +153,18 @@ def evaluate_value(expression: bytes, resolver: Resolver):
         elif opcode == OP_QUESTION_REF1:
             stack.append(resolver.question_value(struct.unpack_from("<H", body, 0)[0])
                          if len(body) >= 2 else None)
+        elif opcode == OP_QUESTION_REF2:
+            question_id = _as_int(pop())
+            stack.append(resolver.question_value(question_id)
+                         if question_id is not None and 0 <= question_id <= 0xFFFF else None)
+        elif opcode == OP_STRING_REF2:
+            string_id = _as_int(pop())
+            stack.append(resolver.string(string_id)
+                         if string_id is not None and 0 <= string_id <= 0xFFFF else None)
+        elif opcode == OP_LENGTH:
+            value = pop()
+            stack.append(len(value.encode("utf-16-le")) // 2 if isinstance(value, str)
+                         else len(value) if isinstance(value, bytes) else None)
         elif opcode == OP_THIS:
             stack.append(resolver.this_value())
         elif opcode == OP_EQ_ID_VAL:
@@ -222,6 +237,48 @@ def evaluate(expression: bytes, resolver: Resolver) -> bool | None:
     """Run the postfix stream. Returns True, False, or None for undecidable."""
     result = evaluate_value(expression, resolver)
     return None if result is None else bool(result)
+
+
+def unknown_causes(expression: bytes, resolver: Resolver) -> list[str]:
+    """Best-effort reasons for an undecidable expression, for coverage reports."""
+    if evaluate(expression, resolver) is not None:
+        return []
+    reasons: set[str] = set()
+    pos = 0
+    while pos + 2 <= len(expression):
+        opcode = expression[pos]
+        length = expression[pos + 1] & 0x7F
+        if length < 2 or pos + length > len(expression):
+            reasons.add("malformed expression")
+            break
+        body = expression[pos + 2:pos + length]
+        pos += length
+        if opcode in (OP_QUESTION_REF1, OP_EQ_ID_VAL, OP_EQ_ID_VAL_LIST, OP_EQ_ID_ID):
+            ids = (struct.unpack_from("<HH", body) if opcode == OP_EQ_ID_ID and len(body) >= 4
+                   else (struct.unpack_from("<H", body)[0],) if len(body) >= 2 else ())
+            for question_id in ids:
+                if resolver.question_value(question_id) is None:
+                    reasons.add(f"missing question 0x{question_id:04x}")
+        elif opcode == OP_STRING_REF1 and len(body) >= 2:
+            string_id = struct.unpack_from("<H", body)[0]
+            if resolver.string(string_id) is None:
+                reasons.add(f"missing string 0x{string_id:04x}")
+        elif opcode in (0x28, 0x3F, 0x60):
+            reasons.add(f"runtime state opcode 0x{opcode:02x}")
+        elif opcode == OP_THIS and resolver.this_value() is None:
+            reasons.add("missing current question value")
+        elif opcode == 0x55:
+            reasons.add("undefined constant")
+        elif opcode in (OP_QUESTION_REF2, OP_STRING_REF2):
+            reasons.add(f"dynamic reference opcode 0x{opcode:02x}")
+        elif opcode in (0x20, 0x21, 0x22, 0x2A, 0x4B, 0x4C, 0x4D, 0x49,
+                        0x51, 0x59, 0x5F, 0x64):
+            reasons.add(f"unsupported opcode 0x{opcode:02x}")
+        elif opcode not in EXPRESSION_OPS:
+            reasons.add(f"unknown opcode 0x{opcode:02x}")
+    if pos != len(expression):
+        reasons.add("malformed expression")
+    return sorted(reasons) or ["undecidable expression"]
 
 
 def referenced_questions(expression: bytes) -> list[int]:

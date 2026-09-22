@@ -12,6 +12,8 @@ import struct
 import uuid
 from dataclasses import dataclass, field
 
+from uefi_mirror.firmware import efi_compression
+
 LZMA_CUSTOM_DECOMPRESS_GUID = uuid.UUID("EE4E5898-3914-4259-9D6E-DC7BD79403CF")
 _LZMA_GUID_LE = LZMA_CUSTOM_DECOMPRESS_GUID.bytes_le
 
@@ -41,6 +43,7 @@ ENCAPSULATION_SECTIONS = {SECTION_COMPRESSION, SECTION_GUID_DEFINED,
                           SECTION_FIRMWARE_VOLUME_IMAGE}
 
 COMPRESSION_NONE = 0x00
+COMPRESSION_STANDARD = 0x01
 GUID_ATTR_PROCESSING_REQUIRED = 0x0001
 
 MAX_TOTAL_DECOMPRESSED = 512 << 20
@@ -246,15 +249,28 @@ def _unwrap(stype: int, body: bytes, path: str, walk_state: "_Walk", depth: int)
                           "content dropped")
             return
         compression_type = body[4]
-        if compression_type != COMPRESSION_NONE:
-            # 0x01 is EFI 1.1 (Tiano) compression, 0x02 LZHF: neither is
-            # implemented, so the content is dropped loudly, not misparsed.
+        if compression_type == COMPRESSION_STANDARD:
+            declared_size = struct.unpack_from("<I", body)[0]
+            limit = min(MAX_SECTION_OUTPUT, walk_state.remaining)
+            if declared_size > limit or not limit:
+                _warn_dropped(walk_state, f"decompression budget exceeded at {path}",
+                              "content dropped")
+                return
+            out = efi_compression.decompress(body[5:], limit)
+            if out is None or len(out) != declared_size:
+                _warn_dropped(walk_state, f"EFI standard section did not decompress at {path}",
+                              "content dropped")
+                return
+            walk_state.remaining -= len(out)
+        elif compression_type == COMPRESSION_NONE:
+            out = body[5:]
+        else:
             _warn_dropped(
                 walk_state,
                 f"unsupported compression type {compression_type:#04x} at {path}",
                 "content dropped")
             return
-        yield from _iter_sections(body[5:], path, walk_state, depth + 1)
+        yield from _iter_sections(out, path, walk_state, depth + 1)
 
 
 def _iter_files(buf: bytes, fv_start: int, header_length: int, fv_length: int,

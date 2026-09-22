@@ -123,12 +123,18 @@ def _scan(source):
 
 def test_production_mutation_is_confined_to_safety_helpers():
     for path in PROD_FILES:
-        findings = _scan(path.read_text())
+        source = path.read_text()
+        findings = _scan(source)
         if path.name == "safety.py":
             # Not a blanket skip: safety.py may only contain the known output
-            # helpers. A stray os.replace or a new firmware setter still fails.
+            # helpers. Replace and cleanup must stay inside write_private.
+            writer = next(node for node in ast.parse(source).body
+                          if isinstance(node, ast.FunctionDef) and node.name == "write_private")
             unexpected = [(line, message) for line, message in findings
-                          if not any(a in message for a in SAFETY_ALLOWED_MUTATIONS)]
+                          if not (any(a in message for a in SAFETY_ALLOWED_MUTATIONS)
+                                  or (writer.lineno <= line <= writer.end_lineno
+                                      and message in ("filesystem mutation os.replace",
+                                                      "filesystem mutation os.unlink")))]
             assert not unexpected, "; ".join(f"{path}:{line}: {message}"
                                              for line, message in unexpected)
             continue
@@ -210,6 +216,25 @@ def test_symlink_is_refused():
             assert exc.errno == errno.ELOOP, exc
 
 
+def test_windows_output_ancestor_junction_is_refused():
+    if os.name != "nt":
+        return
+    with tempfile.TemporaryDirectory() as d:
+        target = os.path.join(d, "target")
+        link = os.path.join(d, "link")
+        os.mkdir(target)
+        subprocess.run(["cmd", "/c", "mklink", "/J", link, target],
+                       check=True, capture_output=True)
+        for action in (lambda: safety.private_dir(os.path.join(link, "snap")),
+                       lambda: safety.write_private(os.path.join(link, "out.json"), b"secret")):
+            try:
+                action()
+                raise AssertionError("output followed a junction ancestor")
+            except PermissionError:
+                pass
+        assert not os.listdir(target)
+
+
 def test_oversize_read_is_refused():
     with tempfile.TemporaryDirectory() as d:
         p = os.path.join(d, "big")
@@ -289,12 +314,58 @@ def test_private_write_retries_partial_os_writes():
         assert len(calls) == 3
 
 
+def test_private_write_failure_preserves_existing_content_and_cleans_temp():
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "out")
+        with open(path, "wb") as file:
+            file.write(b"keep-me")
+        real_write = os.write
+
+        def fail_after_partial(fd, data):
+            real_write(fd, data[:2])
+            raise OSError("disk full")
+
+        safety.os.write = fail_after_partial
+        try:
+            try:
+                safety.write_private(path, b"replacement")
+                raise AssertionError("failed write was accepted")
+            except OSError as exc:
+                assert "disk full" in str(exc)
+        finally:
+            safety.os.write = real_write
+        assert open(path, "rb").read() == b"keep-me"
+        assert os.listdir(d) == ["out"]
+
+
+def test_private_replace_failure_preserves_existing_content_and_cleans_temp():
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "out")
+        with open(path, "wb") as file:
+            file.write(b"keep-me")
+        real_replace = os.replace
+        safety.os.replace = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            OSError("replace blocked"))
+        try:
+            try:
+                safety.write_private(path, b"replacement")
+                raise AssertionError("failed replace was accepted")
+            except OSError as exc:
+                assert "replace blocked" in str(exc)
+        finally:
+            safety.os.replace = real_replace
+        assert open(path, "rb").read() == b"keep-me"
+        assert os.listdir(d) == ["out"]
+
+
 def test_windows_acl_failure_refuses_before_writing():
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, "refused")
-        originals = safety.WINDOWS, safety._windows_fd, safety._set_windows_private_acl
+        originals = (safety.WINDOWS, safety._windows_fd, safety._set_windows_private_acl,
+                     safety._windows_safe_parents)
         safety.WINDOWS = True
         safety._windows_fd = lambda *_args: os.open(path, os.O_WRONLY | os.O_CREAT, 0o600)
+        safety._windows_safe_parents = lambda _path: None
 
         def refuse(_path):
             raise PermissionError("ACL not private")
@@ -308,7 +379,8 @@ def test_windows_acl_failure_refuses_before_writing():
                 pass
             assert open(path, "rb").read() == b""
         finally:
-            safety.WINDOWS, safety._windows_fd, safety._set_windows_private_acl = originals
+            (safety.WINDOWS, safety._windows_fd, safety._set_windows_private_acl,
+             safety._windows_safe_parents) = originals
 
 
 def test_cli_rejects_negative_limits():
@@ -900,8 +972,8 @@ def test_end_to_end_on_a_fake_efivarfs():
             os.symlink("/etc/passwd", os.path.join(fake, "Evil-" + GOOD.split("-", 1)[1]))
 
         out = os.path.join(d, "snap")
-        cli.snapshot.__wrapped__(output=out, efivars=fake) if hasattr(
-            cli.snapshot, "__wrapped__") else cli.snapshot(output=out, efivars=fake)
+        snapshot = getattr(cli.snapshot, "__wrapped__", cli.snapshot)
+        snapshot(output=out, efivars=fake, schema_file=None, verify_stable=False)
 
         manifest = json.load(open(os.path.join(out, "manifest.json")))
         names = {(v["name"], v["guid"]): v for v in manifest["variables"]}

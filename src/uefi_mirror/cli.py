@@ -130,8 +130,7 @@ def _load_schema(image: str | None,
         raise typer.BadParameter("pass a firmware image or --schema, not both")
     if schema_file:
         try:
-            with open(schema_file, "rb") as handle:
-                loaded = Schema.from_json(handle.read())
+            loaded = Schema.from_json(read_bounded(schema_file, 64 << 20))
         except (OSError, ValueError) as exc:
             raise typer.BadParameter(f"{schema_file}: {exc}") from exc
         loaded.image["schema_file"] = os.path.basename(schema_file)
@@ -198,16 +197,28 @@ def probe() -> None:
     else:
         table.add_row("efivarfs", "mounted" if info["efivarfs_mounted"] else "NOT mounted")
 
-    if info["efivarfs_mounted"]:
+    readiness = "Offline analysis available with --snapshot and a matching image or schema"
+    if capability and capability["status"] == "needs_elevation":
+        readiness = "Run from an elevated Administrator terminal for live collection"
+    elif capability and capability["status"] == "not_uefi":
+        readiness = "Live collection unavailable in legacy BIOS mode"
+    elif boot is False:
+        readiness = "Live collection unavailable without UEFI boot"
+
+    if info["efivarfs_mounted"] or (capability and capability["status"] == "ready"):
         try:
-            variables = efivarfs.collect()
+            variables = windows.collect() if capability else efivarfs.collect()
         except (OSError, RuntimeError) as exc:
             table.add_row("Variables", f"unreadable: {exc}")
+            readiness = f"Live collection unavailable: {exc}"
         else:
             ok = [v for v in variables if v.error is None]
             total = sum(v.size for v in ok)
             table.add_row("Variables", f"{len(ok)} readable of {len(variables)}, "
                                        f"{total} payload bytes")
+            readiness = ("Live collection ready; run snapshot --output DIR" if ok else
+                         "Live collection unavailable: no readable variables")
+    table.add_row("Next step", readiness)
 
     fw_attrs = info["firmware_attributes"]
     table.add_row("firmware-attributes",
@@ -309,9 +320,36 @@ def fetch(
 def snapshot(
     output: str = typer.Option(..., "--output", "-o", help="Directory for the snapshot."),
     efivars: str = typer.Option(platform.EFIVARS_DIR, "--efivars", hidden=True),
+    schema_file: str = typer.Option(
+        None, "--schema", help="Capture only variables declared by this saved schema."),
+    verify_stable: bool = typer.Option(
+        False, "--verify-stable", help="Read twice and refuse variables that change during capture."),
 ) -> None:
     """Copy every readable UEFI variable into a private directory."""
-    variables = _live_variables(efivars)
+    selected = None
+    if schema_file:
+        selected = {(setting.varstore.name, setting.varstore.guid.lower())
+                    for setting in _load_schema(None, schema_file)[0].settings
+                    if setting.varstore and setting.varstore.name}
+        if not selected:
+            raise typer.BadParameter("schema declares no named variables")
+
+    def collect_selected() -> list[efivarfs.Variable]:
+        found = _live_variables(efivars)
+        if selected is not None:
+            found = [var for var in found if (var.name, var.guid.lower()) in selected]
+        return found
+
+    variables = collect_selected()
+    if selected is not None and not variables:
+        raise typer.BadParameter("no variables declared by the schema were found")
+    if verify_stable:
+        again = collect_selected()
+        def state(items):
+            return {(v.name, v.guid.lower()): (v.attributes, v.payload, v.error)
+                    for v in items}
+        if state(variables) != state(again):
+            raise typer.BadParameter("variables changed during capture; retry snapshot")
 
     # A firmware-controlled name must never escape raw-variables. safe_component
     # forbids separators and traversal, so a passing name joins to a contained
@@ -332,6 +370,8 @@ def snapshot(
         "tool_version": __version__,
         "collected_at": _now(),
         "source": WINDOWS_FIRMWARE if _windows_live(efivars) else efivars,
+        "selection": "schema" if schema_file else "all",
+        "stable_verified": verify_stable,
         "platform": platform.summary(),
         "variables": [v.manifest() for v in variables],
     }
@@ -349,6 +389,8 @@ def snapshot(
 def schema(
     image: str = typer.Argument(..., help="BIOS update file (.CAP) or raw SPI image."),
     output: str = typer.Option(None, "--output", "-o", help="Write JSON here."),
+    require_complete: bool = typer.Option(
+        False, "--require-complete", help="Refuse a schema with parser warnings."),
     grep: str = typer.Option(None, "--grep", "-g",
                              help="Filter terminal rows; JSON remains complete."),
     limit: int = typer.Option(40, "--limit", min=0, help="Rows to print; 0 for all."),
@@ -364,7 +406,11 @@ def schema(
 
     walk = firmware_volume.walk(capsule.data)
     result = builder.build(capsule.info(), walk.files, walk.warnings)
+    if require_complete and result.warnings:
+        raise typer.BadParameter(
+            f"parser reported {len(result.warnings)} warning(s); refusing partial schema")
     result.image["filename"] = os.path.basename(image)
+    console.print(f"Parser: {len(result.warnings)} warning(s) reported")
     for warning in result.warnings:
         console.print(f"  [yellow]warning[/] {warning}")
     if not result.settings:
@@ -427,6 +473,8 @@ def export(
                                           help="Show inactive variants in terminal/text rows."),
     allow_mismatch: bool = typer.Option(
         False, "--allow-mismatch", help="Continue after a definite image/layout mismatch."),
+    require_complete: bool = typer.Option(
+        False, "--require-complete", help="Refuse a schema with parser warnings."),
     provenance: str = typer.Option(
         None, "--provenance",
         help="Compare with a fetch.json from 'uefi-mirror fetch' (evidence only). "
@@ -443,6 +491,9 @@ def export(
     if fmt == "html" and not output:
         raise typer.BadParameter("--output is required when --format html")
     schema_result, image_bytes, source_name = _load_schema(image, schema_file)
+    if require_complete and schema_result.warnings:
+        raise typer.BadParameter(
+            f"parser reported {len(schema_result.warnings)} warning(s); refusing partial export")
     try:
         if snapshot_dir:
             store = decode.from_snapshot(snapshot_dir)
@@ -461,6 +512,7 @@ def export(
         schema_result.image["filename"] = source_name
     for warning in schema_result.warnings:
         console.print(f"  [yellow]warning[/] {warning}")
+    console.print(f"Parser: {len(schema_result.warnings)} warning(s) reported")
     if not schema_result.settings:
         console.print("[red]No settings in the schema.[/]" if schema_file
                       else "[red]No HII form packages found in the image.[/]")
@@ -499,6 +551,11 @@ def export(
     console.print(f"{counts['active']} settings apply to this machine ("
                   + ", ".join(f"{n} {state}" for state, n
                               in counts["by_visibility"].items()) + ")")
+    if counts["unknown_visibility_causes"]:
+        causes = sorted(counts["unknown_visibility_causes"].items(),
+                        key=lambda pair: (-pair[1], pair[0]))[:5]
+        console.print("  [dim]unknown visibility causes: "
+                      + ", ".join(f"{name} ({count})" for name, count in causes) + "[/]")
     console.print(f"[bold]{counts['changed_and_visible']}[/] of the changed settings "
                   "are ones the setup menu would actually show you")
     for note in variants.evidence:
@@ -532,17 +589,24 @@ def diff(
     schema_file: str = typer.Option(None, "--schema",
                                     help="Schema JSON to name the settings that changed, "
                                          "instead of --image."),
+    old_image: str = typer.Option(None, "--old-image", help="Firmware image for old."),
+    new_image: str = typer.Option(None, "--new-image", help="Firmware image for new."),
+    old_schema: str = typer.Option(None, "--old-schema", help="Schema JSON for old."),
+    new_schema: str = typer.Option(None, "--new-schema", help="Schema JSON for new."),
     output: str = typer.Option(None, "--output", "-o", help="Write the diff here."),
     fmt: str = typer.Option("text", "--format", "-f", help="Output file format: text or json."),
     limit: int = typer.Option(60, "--limit", min=0, help="Rows to print; 0 for all."),
     allow_mismatch: bool = typer.Option(
         False, "--allow-mismatch", help="Continue after a definite image/layout mismatch."),
+    require_complete: bool = typer.Option(
+        False, "--require-complete", help="Fail if either schema has parser warnings."),
     efivars: str = typer.Option(platform.EFIVARS_DIR, "--efivars", hidden=True),
 ) -> None:
     """Compare two snapshots, or a snapshot against the live machine.
 
-    Without --image or --schema this compares raw variable bytes. With either,
-    changed bytes are resolved back to the setting names they belong to.
+    Without a schema source this compares raw variable bytes. Use --image or
+    --schema for both sides, or provide one source per side to compare across
+    firmware versions.
     """
     if fmt not in ("json", "text"):
         raise typer.BadParameter("--format must be text or json")
@@ -552,41 +616,56 @@ def diff(
             return _live_store(efivars)
         return decode.from_snapshot(where)
 
-    schema_result: Schema | None = None
-    image_bytes: bytes | None = None
-    source_name = ""
-    if image or schema_file:
-        schema_result, image_bytes, source_name = _load_schema(image, schema_file)
-    if schema_result is not None:
-        for warning in schema_result.warnings:
-            console.print(f"  [yellow]warning[/] {warning}")
+    side_sources = (old_image, old_schema, new_image, new_schema)
+    if any(side_sources) and (image or schema_file):
+        raise typer.BadParameter("use shared --image/--schema or side-specific sources, not both")
+    if any(side_sources) and not ((old_image or old_schema) and (new_image or new_schema)):
+        raise typer.BadParameter("provide a schema source for both old and new")
+    old_source = new_source = None
+    if any(side_sources):
+        old_source = _load_schema(old_image, old_schema)
+        new_source = _load_schema(new_image, new_schema)
+    elif image or schema_file:
+        old_source = new_source = _load_schema(image, schema_file)
+    if require_complete and any(source is not None and source[0].warnings
+                                for source in (old_source, new_source)):
+        raise typer.BadParameter("incomplete parser/schema: warnings are present")
+    for label, source in (("old", old_source), ("new", new_source)):
+        if source is not None and (label == "old" or source is not old_source):
+            for warning in source[0].warnings:
+                prefix = f"{label}: " if old_source is not new_source else ""
+                console.print(f"  [yellow]warning[/] {prefix}{warning}")
     try:
         old_store, new_store = load(old), load(new)
     except (OSError, ValueError, RuntimeError) as exc:
         raise typer.BadParameter(str(exc)) from exc
 
     old_decoded = new_decoded = None
-    if schema_result is not None:
+    for side, source, store, label in (("old", old_source, old_store, old),
+                                       ("new", new_source, new_store, new)):
+        if source is None:
+            continue
+        schema_result, image_bytes, source_name = source
         if not schema_result.settings:
-            console.print("[red]No settings in the schema.[/]" if schema_file
-                          else "[red]No HII form packages found in the image.[/]")
-            raise typer.Exit(1)
-        # Each side is resolved against its own variables, so a variant that
-        # only appears on one side does not masquerade as a changed setting.
-        old_decoded = decode.decode_all(
-            schema_result.settings, old_store,
-            decode.resolve_variants(schema_result.formsets, old_store).inactive)
-        new_decoded = decode.decode_all(
-            schema_result.settings, new_store,
-            decode.resolve_variants(schema_result.formsets, new_store).inactive)
-        _check_image(schema_result, old_store, image_bytes, source_name, old_decoded,
-                     allow_mismatch, os.path.basename(old))
-        _check_image(schema_result, new_store, image_bytes, source_name, new_decoded,
-                     allow_mismatch, os.path.basename(new))
+            raise typer.BadParameter(f"{label}: no settings in schema")
+        # Resolve variants against each side's own variables and schema.
+        decoded = decode.decode_all(
+            schema_result.settings, store,
+            decode.resolve_variants(schema_result.formsets, store).inactive)
+        _check_image(schema_result, store, image_bytes, source_name, decoded,
+                     allow_mismatch, os.path.basename(label))
+        if side == "old":
+            old_decoded = decoded
+        else:
+            new_decoded = decoded
 
+    warnings = ([f"{label}: {warning}"
+                 for label, source in (("old", old_source), ("new", new_source))
+                 if source is not None for warning in source[0].warnings]
+                if old_source is not new_source else
+                list(old_source[0].warnings) if old_source is not None else [])
     result = diff_mod.build(old_store, new_store, old_decoded, new_decoded,
-                            walk_warnings=schema_result.warnings
-                            if schema_result is not None else [])
+                            walk_warnings=warnings)
     title = f"UEFI settings diff - {os.path.basename(old)} -> {os.path.basename(new)}"
     if output:
         _write_output(output, diff_mod.to_json(result) if fmt == "json"
@@ -595,13 +674,15 @@ def diff(
     tally = result.counts()
     console.print(f"[bold]{tally['variables']['changed']}[/] variables changed, "
                   f"{tally['variables']['added']} added, "
-                  f"{tally['variables']['removed']} removed")
-    if schema_result is None:
+                  f"{tally['variables']['removed']} removed, "
+                  f"{tally['variables']['unreadable']} unreadable")
+    if old_source is None:
         console.print("  [dim]pass --image BIOS.CAP or --schema schema.json to name "
                       "the settings behind these bytes[/]")
     else:
         console.print(f"[bold]{tally['settings_changed']}[/] named settings changed "
-                      f"of {tally['settings_compared']} compared")
+                      f"of {tally['settings_compared']} compared; "
+                      f"{tally['settings_uncompared']} not compared")
 
     if result.is_empty():
         console.print("[green]No differences.[/]")
@@ -635,6 +716,8 @@ def diff(
     variable_rows = [v for v in result.variables if not result.settings]
     for change in variable_rows[:limit or None]:
         console.print(f"  {change.kind:8} {change.name}")
+    for issue in result.settings_uncompared[:limit or None]:
+        console.print(f"  [yellow]{issue.reason}[/] {issue.name}")
     if output:
         console.print(f"Diff written to {output}")
 

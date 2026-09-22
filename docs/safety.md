@@ -105,17 +105,21 @@ paths the user named on the command line. On Linux both refuse, before any
 - an output directory that is a symlink or owned by another user.
 
 Once the checks pass, an existing file is tightened with `fchmod(fd, 0o600)`
-through its own descriptor before it is truncated, so a pre-existing `0644`
-file is never writable by others even momentarily; a new file is created
-`0600` from the start. Output directories are tightened with
-`fchmod(fd, 0o700)` the same way. Permissions are applied by descriptor, so
-they cannot race a swapped path and cannot follow a symlink.
+through its own descriptor. The new contents are written to a `0600` temporary
+file in the same directory, synced, then atomically replace the destination.
+A failed write leaves the previous contents intact and removes the temporary
+file. Output directories are tightened with `fchmod(fd, 0o700)` through their
+own descriptors. Parent directories are opened without following symlinks.
 
 On Windows, files and directories are created with a protected DACL already in
 place — exactly one full-access ACE for their owner, no inheritance — so there
 is no window in which an inherited DACL applies; the ACL is then read back and
-verified before any payload bytes are written. Windows junctions and other
-reparse points are refused rather than followed.
+verified before any payload bytes are written. The private temporary file
+replaces the destination after its contents are synced. Windows junctions and
+other reparse points are refused rather than followed.
+Windows ancestor checks use paths, so a concurrent process able to replace a
+parent directory during the check remains outside this guarantee. Keep
+sensitive output under a directory owned only by the current user.
 
 Before networking, `fetch` additionally requires its output directory to be
 missing or empty and safe, then repeats that check after validation. It writes
@@ -140,6 +144,7 @@ The suite includes static scans of the shipped source and behavioral checks:
 | `read_flags_are_hardened` | Linux `RO_FLAGS` losing `O_NOFOLLOW`/`O_CLOEXEC`, or gaining a write bit. |
 | `cli_exposes_no_mutating_command` | A subcommand named `set`, `write`, `restore`, `flash`, `unlock`, `erase` or `modify` reaching the CLI. |
 | `symlink_is_refused` | Following a Linux symlink or Windows directory junction. |
+| `windows_output_ancestor_junction_is_refused` | Writing through a Windows junction above the output destination. |
 | `oversize_read_is_refused` | Unbounded reads. |
 | `output_permissions_are_private` | World-readable exports or snapshots, checked as POSIX modes on Linux and the actual DACL on Windows. |
 | `windows_acl_failure_refuses_before_writing` | Writing sensitive bytes after Windows ACL setup fails. |
