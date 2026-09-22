@@ -645,6 +645,73 @@ def provenance_document(
     }
 
 
+def provenance_evidence(
+    data: bytes, image_sha256: str, hash_source: str, dmi: Mapping[str, str],
+) -> tuple[list[str], list[str]]:
+    """Compare a saved download fetch.json with an image and a machine's DMI.
+
+    Returns (evidence, problems). fetch.json is a local, user-editable record,
+    so agreement is evidence only and never proves the installed release; a
+    definite disagreement is a problem. Raises ValueError for anything that is
+    not a current-format download record.
+    """
+    try:
+        document = json.loads(data)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"fetch.json is not valid JSON: {exc}") from exc
+    if not isinstance(document, dict):
+        raise ValueError("fetch.json must be a JSON object")
+    if document.get("format_version") != FETCH_FORMAT_VERSION:
+        raise ValueError(
+            f"unsupported fetch.json format_version {document.get('format_version')!r}; "
+            f"expected {FETCH_FORMAT_VERSION}")
+    image = document.get("image")
+    identity = document.get("selected_identity")
+    checksum = document.get("publisher_checksum")
+    if not (isinstance(image, dict) and isinstance(identity, dict)
+            and isinstance(checksum, dict)):
+        raise ValueError("fetch.json is not a download record; pass the fetch.json "
+                         "saved by 'uefi-mirror fetch --output'")
+    recorded_sha = image.get("file_sha256")
+    if not isinstance(recorded_sha, str) or not recorded_sha:
+        raise ValueError("fetch.json image.file_sha256 is missing")
+
+    evidence: list[str] = []
+    problems: list[str] = []
+    if not image_sha256:
+        problems.append("schema records no image SHA-256 to compare with fetch.json")
+    elif hmac.compare_digest(image_sha256.casefold(), recorded_sha.casefold()):
+        evidence.append(f"image SHA-256 {hash_source} matches fetch.json")
+    else:
+        problems.append(f"image SHA-256 {hash_source} differs from fetch.json "
+                        f"({image_sha256} != {recorded_sha})")
+
+    if checksum.get("status") == "verified":
+        evidence.append(f"fetch.json records the ASUS SHA-256 as verified against the "
+                        f"{checksum.get('target')}")
+    else:
+        evidence.append("fetch.json records no verified ASUS SHA-256")
+
+    live_model = _dmi_text(dmi.get("board_name")) or _dmi_text(dmi.get("product_name"))
+    live_version = _dmi_text(dmi.get("bios_version"))
+    for label, recorded, live in (("model", identity.get("model"), live_model),
+                                  ("BIOS version", identity.get("bios_version"),
+                                   live_version)):
+        recorded = _text(recorded)
+        if not recorded:
+            evidence.append(f"fetch.json records no {label}")
+        elif not live:
+            evidence.append(f"no machine {label} to compare with fetch.json {recorded!r}")
+        elif recorded.casefold() == live.casefold():
+            evidence.append(f"fetch.json {label} {recorded!r} matches this machine")
+        else:
+            problems.append(f"fetch.json {label} {recorded!r} differs from this "
+                            f"machine's {live!r}")
+    evidence.append("fetch.json is a local record and cannot prove the image is the "
+                    "installed firmware release")
+    return evidence, problems
+
+
 def select_release(releases: list[Release], requested_version: str) -> Release:
     version = _text(requested_version)
     if not version:

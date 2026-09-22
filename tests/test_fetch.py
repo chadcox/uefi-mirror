@@ -898,6 +898,109 @@ def test_fetched_image_flows_through_existing_schema_and_export(tmp_path, monkey
     assert len(calls) == 2  # Existing schema/export commands remain offline.
 
 
+def _fetched_with_snapshot(tmp_path, monkeypatch, snapshot_dmi=FETCH_DMI):
+    _image, artifact, metadata = _fetch_inputs()
+    _fake_fetch_network(monkeypatch, artifact, metadata)
+    monkeypatch.setattr(cli.platform, "dmi", lambda: FETCH_DMI)
+    output = tmp_path / "firmware"
+    fetched = RUNNER.invoke(cli.app, ["fetch", "-o", str(output)])
+    assert fetched.exit_code == 0, fetched.output
+    snapshot = _identity_snapshot(tmp_path / "snapshot", snapshot_dmi, bytes(0x100))
+    return output, snapshot
+
+
+def _export_with_provenance(output, snapshot, provenance, *extra):
+    return RUNNER.invoke(cli.app, [
+        "export", str(output / "BIOS.CAP"), "--snapshot", str(snapshot),
+        "--provenance", str(provenance), *extra,
+    ])
+
+
+def test_matching_provenance_is_evidence_and_never_upgrades_to_matched(tmp_path, monkeypatch):
+    output, snapshot = _fetched_with_snapshot(tmp_path, monkeypatch)
+    export_path = tmp_path / "export.json"
+
+    result = _export_with_provenance(
+        output, snapshot, output / "fetch.json", "-o", str(export_path))
+
+    assert result.exit_code == 0, result.output
+    compatibility = json.loads(export_path.read_text())["image"]["compatibility"]
+    assert compatibility["status"] == "unverified"
+    assert compatibility["problems"] == []
+    evidence = compatibility["evidence"]
+    assert "image SHA-256 computed from the image matches fetch.json" in evidence
+    assert "fetch.json BIOS version '2402' matches this machine" in evidence
+    assert any("cannot prove the image is the installed" in line for line in evidence)
+
+
+def test_provenance_for_a_different_image_is_a_mismatch(tmp_path, monkeypatch):
+    output, snapshot = _fetched_with_snapshot(tmp_path, monkeypatch)
+    manifest = json.loads((output / "fetch.json").read_text())
+    manifest["image"]["file_sha256"] = "0" * 64
+    forged = tmp_path / "forged.json"
+    forged.write_text(json.dumps(manifest))
+
+    result = _export_with_provenance(output, snapshot, forged)
+
+    assert result.exit_code != 0
+    assert "differs from fetch.json" in ANSI.sub("", result.output)
+
+
+def test_provenance_for_another_bios_version_is_a_mismatch(tmp_path, monkeypatch):
+    output, snapshot = _fetched_with_snapshot(
+        tmp_path, monkeypatch, {**FETCH_DMI, "bios_version": "2301"})
+    export_path = tmp_path / "export.json"
+
+    blocked = _export_with_provenance(output, snapshot, output / "fetch.json")
+    allowed = _export_with_provenance(
+        output, snapshot, output / "fetch.json", "--allow-mismatch", "-o", str(export_path))
+
+    assert blocked.exit_code != 0
+    assert allowed.exit_code == 0, allowed.output
+    compatibility = json.loads(export_path.read_text())["image"]["compatibility"]
+    assert compatibility["status"] == "mismatch"
+    assert compatibility["problems"] == [
+        "fetch.json BIOS version '2402' differs from this machine's '2301'"]
+
+
+def test_fetch_json_beside_the_image_is_checked_without_a_flag(tmp_path, monkeypatch):
+    output, snapshot = _fetched_with_snapshot(
+        tmp_path, monkeypatch, {**FETCH_DMI, "bios_version": "2301"})
+
+    result = RUNNER.invoke(cli.app, [
+        "export", str(output / "BIOS.CAP"), "--snapshot", str(snapshot)])
+
+    assert result.exit_code != 0
+    assert "fetch.json BIOS version '2402' differs" in ANSI.sub("", result.output)
+
+
+def test_image_without_fetch_json_beside_it_skips_the_provenance_check(
+        tmp_path, monkeypatch):
+    output, snapshot = _fetched_with_snapshot(tmp_path, monkeypatch)
+    (output / "fetch.json").unlink()
+    export_path = tmp_path / "export.json"
+
+    result = RUNNER.invoke(cli.app, [
+        "export", str(output / "BIOS.CAP"), "--snapshot", str(snapshot),
+        "-o", str(export_path)])
+
+    assert result.exit_code == 0, result.output
+    evidence = json.loads(export_path.read_text())["image"]["compatibility"]["evidence"]
+    assert not any("fetch.json" in line for line in evidence)
+
+
+@pytest.mark.parametrize("document", [
+    b"not json",
+    b"[]",
+    json.dumps({"format_version": 1}).encode(),
+    json.dumps({"format_version": fetch.FETCH_FORMAT_VERSION,
+                "operation": "resolve"}).encode(),
+])
+def test_provenance_rejects_anything_but_a_current_download_record(document):
+    with pytest.raises(ValueError):
+        fetch.provenance_evidence(document, "0" * 64, "computed from the image", FETCH_DMI)
+
+
 def test_resolve_only_json_does_not_download_or_write(tmp_path, monkeypatch):
     _image, artifact, metadata = _fetch_inputs()
     calls = _fake_fetch_network(monkeypatch, artifact, metadata)

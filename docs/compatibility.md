@@ -51,8 +51,13 @@ image. Format 2 removes that ambiguity; snapshot, schema, and export formats are
 unchanged.
 
 `fetch.json` is an audit record, not a trusted input to another command.
-Existing commands parse the image path supplied by the user and do not load the
-manifest. A successful `fetch --json` wrapper has `operation: "fetch"`, saved
+Commands parse the image path supplied by the user; only `export` loads a
+manifest — the `fetch.json` beside the image by default, or `--provenance
+PATH` — and only as compatibility evidence. It accepts a current
+format download record and rejects resolve documents and other format versions.
+Agreement between the manifest's image SHA-256, model and BIOS version and the
+image and machine adds evidence lines but never raises the status above
+`unverified`; a disagreement is a `mismatch` problem. A successful `fetch --json` wrapper has `operation: "fetch"`, saved
 paths, and its format-2 provenance; `fetch --resolve-only --json` has
 `operation: "resolve"` and selection metadata but no saved paths or computed
 artifact/image hashes. Neither shape claims the downloaded image is the

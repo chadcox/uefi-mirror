@@ -170,6 +170,18 @@ collected variables:
 `matched` is reserved for a future check that can verify image identity
 independently; no command emits it today.
 
+When a `fetch.json` saved by `uefi-mirror fetch` sits beside the image,
+`export` compares it with the image and the machine automatically; use
+`--provenance PATH` for a manifest stored elsewhere. Matching image SHA-256,
+model and BIOS version are added as evidence only; a local manifest cannot
+prove identity, so the status stays `unverified`. Any disagreement is a
+`mismatch`, which catches exporting against a stale download or another
+board's image:
+
+```console
+$ uefi-mirror export firmware/BIOS.CAP -o bios.json   # checks firmware/fetch.json
+```
+
 `--allow-mismatch` exists for parser research and forensic inspection, not
 normal exports. It can produce believable but incorrect setting names and
 values.

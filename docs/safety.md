@@ -22,7 +22,8 @@ tool never elevates itself.
 
 ## How reads are performed
 
-Linux firmware and snapshot-file reads go through `safety.read_bounded`:
+Linux firmware, snapshot-file, and `export` fetch-manifest reads go through
+`safety.read_bounded`:
 
 ```python
 RO_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC

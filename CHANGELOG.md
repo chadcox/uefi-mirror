@@ -26,6 +26,13 @@ Behavior changes since 1.0.0, pending the next release.
   format 1 and schema/export remain format 3; package version remains 1.0.0.
   `--snapshot`, explicit identity/version overrides, `--resolve-only`, and
   clean JSON output remain supported.
+- **Fetch provenance check in `export`.** Compares a download `fetch.json`
+  with the image and the machine being decoded — automatically when
+  `fetch.json` sits beside the image, or from `--provenance PATH`. A matching image SHA-256, model and BIOS
+  version add compatibility evidence but never raise the status above
+  `unverified`; a disagreement is a `mismatch` that stops the export unless
+  `--allow-mismatch` is given. Resolve documents and other fetch format
+  versions are rejected.
 - **Representative live retrieval evidence.** Exact releases X870E-E/2402,
   B650E-F/3881, TUF X870-PLUS/1681, TUF Z790-PLUS/1836, and Z790-E/3202 passed
   format-2 resolve/download smokes against official ASUS endpoints. These are

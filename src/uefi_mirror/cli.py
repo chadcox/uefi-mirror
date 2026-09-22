@@ -13,7 +13,14 @@ from . import diff as diff_mod
 from . import fetch as fetch_mod
 from .collectors import efivarfs, windows
 from .firmware import cap, firmware_volume
-from .safety import private_dir, require_empty_output_dir, safe_component, write_private
+from .safety import (
+    MAX_VARIABLE_BYTES,
+    private_dir,
+    read_bounded,
+    require_empty_output_dir,
+    safe_component,
+    write_private,
+)
 from .schema import builder
 from .schema.model import Schema, schema_hash
 
@@ -143,9 +150,24 @@ def _load_schema(image: str | None,
 
 def _check_image(schema_result, store: decode.VariableStore, image: bytes | None,
                  image_name: str, decoded, allow_mismatch: bool,
-                 label: str = "") -> decode.Compatibility:
+                 label: str = "", provenance: str | None = None) -> decode.Compatibility:
+    dmi = _dmi_for(store)
     result = decode.check_compatibility(
-        schema_result.settings, store, image, _dmi_for(store), decoded, image_name)
+        schema_result.settings, store, image, dmi, decoded, image_name)
+    if provenance:
+        try:
+            data = read_bounded(provenance, MAX_VARIABLE_BYTES)
+            sha = schema_result.image.get("file_sha256")
+            evidence, problems = fetch_mod.provenance_evidence(
+                data, sha if isinstance(sha, str) else "",
+                "computed from the image" if image is not None else "recorded in the schema",
+                dmi)
+        except (OSError, ValueError) as exc:
+            raise typer.BadParameter(f"{provenance}: {exc}") from exc
+        result.evidence.extend(evidence)
+        result.problems.extend(problems)
+        if result.problems:
+            result.status = "mismatch"
     prefix = f"{label}: " if label else ""
     detail = "; ".join(result.problems or result.evidence)
     if result.status == "mismatch" and not allow_mismatch:
@@ -405,6 +427,10 @@ def export(
                                           help="Show inactive variants in terminal/text rows."),
     allow_mismatch: bool = typer.Option(
         False, "--allow-mismatch", help="Continue after a definite image/layout mismatch."),
+    provenance: str = typer.Option(
+        None, "--provenance",
+        help="Compare with a fetch.json from 'uefi-mirror fetch' (evidence only). "
+             "Default: fetch.json beside the image, if present."),
     limit: int = typer.Option(40, "--limit", min=0, help="Rows to print; 0 for all."),
     efivars: str = typer.Option(platform.EFIVARS_DIR, "--efivars", hidden=True),
 ) -> None:
@@ -425,6 +451,12 @@ def export(
     except (OSError, ValueError, RuntimeError) as exc:
         raise typer.BadParameter(str(exc)) from exc
 
+    if not provenance and image:
+        # fetch saves the image and fetch.json together; check the pair by default.
+        beside = os.path.join(os.path.dirname(image), "fetch.json")
+        if os.path.lexists(beside):
+            provenance = beside
+            console.print(f"[dim]comparing with {beside}[/]")
     if source_name:
         schema_result.image["filename"] = source_name
     for warning in schema_result.warnings:
@@ -437,7 +469,8 @@ def export(
     variants = decode.resolve_variants(schema_result.formsets, store)
     decoded = decode.decode_all(schema_result.settings, store, variants.inactive)
     compatibility = _check_image(
-        schema_result, store, image_bytes, source_name, decoded, allow_mismatch)
+        schema_result, store, image_bytes, source_name, decoded, allow_mismatch,
+        provenance=provenance)
     schema_result.image["compatibility"] = compatibility.as_dict()
     document = report.build_document(schema_result, store, decoded, variants)
 
