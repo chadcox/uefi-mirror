@@ -225,7 +225,11 @@ def optional_tools() -> dict[str, str | None]:
                 detail = (stderr or stdout or [f"exit {proc.returncode}"])[0]
                 found[tool] = f"{path} (version check failed: {detail})"
             else:
-                found[tool] = (stdout or stderr or [path])[0]
+                lines = stdout or stderr or [path]
+                if tool == "fwupdmgr":
+                    # fwupd 2.x lists its dependencies first (libusb, ...).
+                    lines = [line for line in lines if "org.freedesktop.fwupd" in line] or lines
+                found[tool] = lines[0]
         except (OSError, subprocess.SubprocessError) as exc:
             found[tool] = f"{path} (version check failed: {exc})"
     return found

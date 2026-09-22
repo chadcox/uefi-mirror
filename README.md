@@ -570,6 +570,7 @@ post-1.0 hardware validation, not 1.0 support claims.
 | Image family | Support |
 |---|---|
 | ASUS ROG Strix X870E-E Gaming WiFi, firmware 2402 | Decoding hardware-verified; live collection validated on Linux and physical Windows |
+| Gigabyte X870 AORUS ELITE WIFI7 ICE, firmware F12 | Decoding validated, values not checked against the setup menu; live collection validated on Linux (post-1.0); 4392 settings/21 form sets |
 | Gigabyte X570 AORUS ELITE F40 | Parsed: 2342 settings/20 form sets; hardware unverified |
 | MSI MS-7E54, firmware 2.A90 | Parsed: 9511 settings/10 form sets; hardware unverified |
 | Other AMI Aptio images | Expected, not verified |

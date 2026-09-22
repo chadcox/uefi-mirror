@@ -31,3 +31,17 @@ def test_windows_capability_states():
     assert platform._capability(0, 0)["status"] == "unavailable"
     assert platform._capability(2, platform.ERROR_PRIVILEGE_NOT_HELD)["status"] == "needs_elevation"
     assert platform._capability(2, 998)["status"] == "ready"
+
+
+def test_fwupdmgr_version_reports_fwupd_not_its_first_dependency(monkeypatch):
+    """fwupd 2.x lists libusb first; probe once showed 'info.libusb 1.0.30' as fwupd."""
+    output = ("compile   info.libusb                   1.0.30\n"
+              "compile   org.freedesktop.fwupd         2.1.7\n"
+              "runtime   org.freedesktop.fwupd         2.1.7\n")
+    monkeypatch.setattr(platform, "OPTIONAL_TOOLS", ("fwupdmgr",))
+    monkeypatch.setattr(platform.shutil, "which", lambda tool: "/usr/bin/fwupdmgr")
+    monkeypatch.setattr(platform.subprocess, "run", lambda *a, **k:
+                        platform.subprocess.CompletedProcess(a[0], 0, output, ""))
+
+    assert platform.optional_tools() == {
+        "fwupdmgr": "compile   org.freedesktop.fwupd         2.1.7"}

@@ -81,6 +81,23 @@ Behavior changes since 1.0.0, pending the next release.
   `offset: -2`) now fail to load. No schema format-version bump: the
   serialized shape is unchanged; only invalid data is now rejected.
 
+### Fixed
+
+- **`probe` reports the fwupd version.** fwupd 2.x prints its dependencies
+  first, so the optional-tools row showed libusb's version
+  (`info.libusb 1.0.30`) as fwupd's. It now shows the `org.freedesktop.fwupd`
+  line.
+
+### Hardware validation
+
+- **Gigabyte X870 AORUS ELITE WIFI7 ICE, firmware F12.** Live collection and
+  decoding validated on physical Linux (Fedora 44, non-root): 92/92 variables
+  read, 4392 settings in 21 form sets, 3637 decoded `ok`, compatibility
+  `unverified` with no problems. Decoded values were checked for validity
+  (1040/1040 live enum values), not against the setup menu. One compressed section with an unknown
+  decompressor GUID is dropped and reported as a warning. Windows collection on
+  this board is not yet validated.
+
 ## 1.0.0 - 2026-09-04
 
 First stable release.
