@@ -46,6 +46,9 @@ Behavior changes since 1.0.0, pending the next release.
   readable image says so instead of silently under-reporting. The diff JSON
   document gains the same notes as an additive `warnings` array, present
   only when non-empty. A fully readable image produces no walk warnings.
+  The walker skips volumes that are not FFS file systems (such as NVRAM
+  variable stores) and does not parse RAW files as section lists, so neither
+  raises a false "malformed" warning.
 
 ### Changed
 

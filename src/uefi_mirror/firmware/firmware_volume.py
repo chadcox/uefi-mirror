@@ -19,9 +19,17 @@ FV_SIGNATURE = b"_FVH"
 FV_SIGNATURE_OFFSET = 40
 FV_HEADER_MIN = 56
 FV_ATTR_ERASE_POLARITY = 0x00000800
+# Volumes whose files use the FFS layout. Anything else (e.g. an NVRAM
+# variable-store volume) shares the _FVH header but not the file format.
+FFS_FILESYSTEM_GUIDS = frozenset(uuid.UUID(g).bytes_le for g in (
+    "7a9354d9-0468-444a-81ce-0bf617d890df",  # FFS1 (Framework)
+    "8c8ce578-8a3d-4f1c-9935-896185c32dd3",  # FFS2
+    "5473c07a-3dcb-4dca-bd6f-1e9689e7349a",  # FFS3
+))
 
 FFS_HEADER_SIZE = 24
 FFS_ATTRIB_LARGE_FILE = 0x01
+FFS_FILE_TYPE_RAW = 0x01  # opaque body, no section list
 FFS_FILE_TYPE_PAD = 0xF0
 FFS_FILE_TYPE_FREE = 0xFF
 
@@ -282,8 +290,9 @@ def _iter_files(buf: bytes, fv_start: int, header_length: int, fv_length: int,
             file_path = f"{path}/file@0x{pos - fv_start:x}"
             file = FfsFile(guid=str(uuid.UUID(bytes_le=header[:16])),
                            type=file_type, path=file_path)
-            file.sections = list(_iter_sections(
-                buf[pos + body_offset:pos + size], file_path, walk_state, depth))
+            if file_type != FFS_FILE_TYPE_RAW:
+                file.sections = list(_iter_sections(
+                    buf[pos + body_offset:pos + size], file_path, walk_state, depth))
             for section in file.sections:
                 if section.type == SECTION_USER_INTERFACE and file.ui_name is None:
                     file.ui_name = section.data.decode(
@@ -309,6 +318,8 @@ def _walk_volumes(buf: bytes, path: str, walk_state: "_Walk", depth: int) -> Non
             "volume dropped")
         return
     for fv_start, header_length, fv_length in find_volumes(buf):
+        if buf[fv_start + 16:fv_start + 32] not in FFS_FILESYSTEM_GUIDS:
+            continue
         _iter_files(buf, fv_start, header_length, fv_length,
                     f"{path}/fv@0x{fv_start:x}", walk_state, depth)
 

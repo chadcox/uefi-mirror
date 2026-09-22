@@ -479,6 +479,31 @@ def test_a_malformed_file_header_warns_and_drops_the_rest_of_the_volume():
                for w in result.warnings)
 
 
+def test_a_raw_file_is_kept_without_parsing_its_body_as_sections():
+    """A RAW file (type 0x01) is an opaque blob such as a PE image or an NVAR
+    store; reading it as a section list produced false malformed warnings."""
+    raw = bytearray(fixtures.build_ffs_file(b"MZ\x90\x00" + b"\x12" * 12))
+    raw[18] = 0x01
+    result = firmware_volume.walk(fixtures.build_firmware_volume(bytes(raw)))
+    (file,) = result.files
+    assert file.type == 0x01 and file.sections == []
+    assert result.warnings == []
+
+
+def test_a_non_ffs_volume_is_skipped_without_warning():
+    """An NVRAM variable-store volume shares the _FVH header but not the FFS
+    file layout, so walking it as FFS only produced false warnings."""
+    good = fixtures.build_ffs_file(fixtures.build_section(0x03, b"abcd"))
+    volume = bytearray(fixtures.build_firmware_volume(good + b"\x12" * 16))
+    nvram = uuid.UUID("fff12b8d-7696-4c8b-a985-2747075b4f50").bytes_le
+    volume[16:32] = nvram
+    checksum = sum(struct.unpack("<36H", volume[:72])) & 0xFFFF
+    struct.pack_into("<H", volume, 50, (struct.unpack_from("<H", volume, 50)[0]
+                                        - checksum) & 0xFFFF)
+    result = firmware_volume.walk(bytes(volume))
+    assert result.files == [] and result.warnings == []
+
+
 def test_erased_space_terminates_a_volume_without_warning():
     good = fixtures.build_ffs_file(fixtures.build_section(0x03, b"abcd"))
     result = firmware_volume.walk(
