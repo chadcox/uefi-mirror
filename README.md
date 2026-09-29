@@ -69,10 +69,20 @@ gate for any broader support claim. See [1.1.0 changes](CHANGELOG.md) for detail
 - **Bug reports and support threads.** Attach an export instead of a photograph of
   the setup screen.
 
-## Install from source
+## Install
 
 Python 3.12+. Two dependencies (`typer`, `rich`); the firmware parsers are pure
 standard library.
+
+Install a tagged release into its own environment with
+[pipx](https://pipx.pypa.io/):
+
+```console
+$ pipx install git+https://github.com/chadcox/uefi-mirror@v1.1.0
+$ uefi-mirror probe
+```
+
+### Install from source
 
 ```console
 $ git clone https://github.com/chadcox/uefi-mirror.git

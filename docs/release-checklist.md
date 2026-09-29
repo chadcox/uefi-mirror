@@ -103,3 +103,13 @@ here; do not commit the raw snapshots or machine-specific export.
 
 Cross-vendor items are follow-up coverage rather than 1.0 blockers. The
 before/after diff and clean-build checks remain release gates.
+
+## Publishing
+
+- [ ] Configure the PyPI trusted publisher (owner `chadcox`, repo
+  `uefi-mirror`, workflow `release.yml`, environment `pypi`) and a protected
+  `pypi` environment before the first tag push.
+- [ ] Push a `vX.Y.Z` tag matching `pyproject.toml`, `__version__`, and the
+  `CHANGELOG.md` heading. The `release` workflow re-runs the safety suite,
+  tests, and lint, builds the sdist and wheel, smoke-installs the wheel, and
+  publishes to PyPI through trusted publishing.
