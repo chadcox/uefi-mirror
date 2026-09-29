@@ -146,7 +146,11 @@ $ uefi-mirror fetch --manufacturer ASUS \
 Fetched 2402 to firmware/ROG-STRIX-X870E-E-GAMING-WIFI-ASUS-2402.CAP
 Provenance written to firmware/fetch.json
 Publisher checksum: verified (target=artifact)
+warning: compressed section with unknown decompressor GUID ce3233f5-2cd6-4d87-9152-4a238bb6d1c4 at image/fv@0x1c00000/file@0x1fd0/sec@0x0; content dropped
+warning: compressed section with unknown decompressor GUID ce3233f5-2cd6-4d87-9152-4a238bb6d1c4 at image/fv@0x1e00000/file@0x1fd0/sec@0x0; content dropped
 ```
+
+Provenance warnings are printed to stderr and also recorded in `fetch.json`.
 
 This is an explicit network operation. With unambiguous ASUS retail-board DMI,
 the three identity options may be omitted. If local DMI differs from ASUS's
@@ -348,7 +352,7 @@ $ uefi-mirror probe
  efivarfs             mounted
  Variables            134 readable of 134, 127889 payload bytes
  firmware-attributes  none
- Optional tools       fwupdmgr: compile   info.libusb   1.0.30
+ Optional tools       fwupdmgr: 2.1.7
  Privileges           uid 1000 (some variables may be unreadable)
 ```
 
