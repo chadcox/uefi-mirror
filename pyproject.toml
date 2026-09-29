@@ -1,6 +1,6 @@
 [project]
 name = "uefi-mirror"
-version = "1.1.0"
+version = "1.2.0"
 description = "Read-only cross-platform exporter for live UEFI/BIOS settings"
 readme = "README.md"
 license = "MIT"

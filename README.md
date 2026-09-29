@@ -33,20 +33,20 @@ ever performs are the output files and snapshot directories you name on the
 command line, and those go through the two guarded helpers described in
 [`docs/safety.md`](docs/safety.md).
 
-## What's new in 1.1.0
+## What's new in 1.2.0
 
-- `fetch` retrieves a reviewed, exact ASUS release and records provenance;
-  `export` checks that record against the image and machine when present.
-- Named `diff` can use a different image or schema for each side of a firmware
-  update. Failed variable reads are reported as unreadable, not as changes.
-- Snapshots can be limited to a saved schema and checked for changes between
-  two reads. Output files are replaced atomically after a successful write.
-- The parser handles EFI standard compression and reports why a visibility
-  condition is undecidable. `--require-complete` refuses parser warnings.
+- `fetch` prints the publisher checksum status and every provenance warning on
+  the terminal instead of recording them only in `fetch.json`.
+- `probe` reports the fwupd version number rather than a raw version record.
+- The Windows collector's native-call glue is covered by CI tests on both
+  Linux and Windows; only true native firmware behaviour needs a physical board.
+- Tagged releases are built, tested and published to PyPI automatically.
 
-The compression path has synthetic tests but no vendor-image validation yet.
-Physical Windows validation beyond the ASUS reference board remains a release
-gate for any broader support claim. See [1.1.0 changes](CHANGELOG.md) for detail.
+1.1.0 added exact ASUS `fetch` with provenance checks in `export`, cross-version
+named `diff`, schema-scoped and stability-checked snapshots, EFI standard
+compression, and `--require-complete`. Physical Windows validation beyond the
+ASUS reference board remains a release gate for any broader support claim. See
+[CHANGELOG.md](CHANGELOG.md) for detail.
 
 ## Who this is for
 
@@ -78,7 +78,7 @@ Install a tagged release into its own environment with
 [pipx](https://pipx.pypa.io/):
 
 ```console
-$ pipx install git+https://github.com/chadcox/uefi-mirror@v1.1.0
+$ pipx install git+https://github.com/chadcox/uefi-mirror@v1.2.0
 $ uefi-mirror probe
 ```
 

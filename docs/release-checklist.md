@@ -109,9 +109,10 @@ before/after diff and clean-build checks remain release gates.
 
 ## Publishing
 
-- [ ] Configure the PyPI trusted publisher (owner `chadcox`, repo
+- [x] Configure the PyPI trusted publisher (owner `chadcox`, repo
   `uefi-mirror`, workflow `release.yml`, environment `pypi`) and a protected
-  `pypi` environment before the first tag push.
+  `pypi` environment before the first tag push. Done 2026-09-29: pending
+  publisher registered; `pypi` requires reviewer `chadcox`.
 - [ ] Push a `vX.Y.Z` tag matching `pyproject.toml`, `__version__`, and the
   `CHANGELOG.md` heading. The `release` workflow re-runs the safety suite,
   tests, and lint, builds the sdist and wheel, smoke-installs the wheel, and

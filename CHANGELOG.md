@@ -4,6 +4,10 @@ All notable changes to `uefi-mirror` are documented here.
 
 ## Unreleased
 
+No changes yet.
+
+## 1.2.0 - 2026-09-29
+
 ### Added
 
 - **Release workflow and pipx install route.** A tag-triggered GitHub Actions
