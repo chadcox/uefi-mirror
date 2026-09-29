@@ -117,3 +117,5 @@ before/after diff and clean-build checks remain release gates.
   `CHANGELOG.md` heading. The `release` workflow re-runs the safety suite,
   tests, and lint, builds the sdist and wheel, smoke-installs the wheel, and
   publishes to PyPI through trusted publishing.
+  1.2.0 was published this way on 2026-09-29 (release run 36644311803, approved
+  by `chadcox`); `pip install uefi-mirror==1.2.0` was checked in a fresh venv.

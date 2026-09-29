@@ -74,12 +74,18 @@ ASUS reference board remains a release gate for any broader support claim. See
 Python 3.12+. Two dependencies (`typer`, `rich`); the firmware parsers are pure
 standard library.
 
-Install a tagged release into its own environment with
-[pipx](https://pipx.pypa.io/):
+Install from [PyPI](https://pypi.org/project/uefi-mirror/) into its own
+environment with [pipx](https://pipx.pypa.io/):
+
+```console
+$ pipx install uefi-mirror
+$ uefi-mirror probe
+```
+
+Or install a specific tagged release straight from GitHub:
 
 ```console
 $ pipx install git+https://github.com/chadcox/uefi-mirror@v1.2.0
-$ uefi-mirror probe
 ```
 
 ### Install from source
