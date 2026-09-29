@@ -732,8 +732,10 @@ CI runs this offline suite on Python 3.12 and 3.13 on both `ubuntu-latest` and
 DACL and junction checks. A non-gating Windows smoke step also probes the
 hosted runner and attempts a live snapshot; the
 [2026-09-01 validation run](https://github.com/chadcox/uefi-mirror/actions/runs/33569671960)
-detected Hyper-V UEFI and collected 31 variables. Synthetic buffers still provide
-the deterministic enumeration coverage. Physical Windows validation on an ASUS
+detected Hyper-V UEFI and collected 31 variables. Synthetic buffers and stub-DLL
+tests give deterministic, CI-gated coverage of enumeration parsing and the
+Python-side ctypes glue; only true native ABI behaviour depends on physical
+validation. Physical Windows validation on an ASUS
 ROG Strix X870E-E Gaming WiFi running firmware 2402 collected 137 variables and
 successfully decoded 5376 settings with a clean compatibility check
 (`unverified`, no layout conflicts). A physical Windows
