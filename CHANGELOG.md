@@ -4,12 +4,24 @@ All notable changes to `uefi-mirror` are documented here.
 
 ## Unreleased
 
+### Added
+
+- **Release workflow and pipx install route.** A tag-triggered GitHub Actions
+  workflow runs the safety contract, tests and lint, builds and smoke-installs
+  the wheel, then publishes to PyPI through trusted publishing. README documents
+  installing a tagged release with pipx from GitHub.
+
 ### Changed
 
 - **fetch reports integrity on the terminal.** Human output now states the
   publisher checksum status and prints every provenance warning (for example a
   missing publisher SHA-256 or a BIOS version that differs from the detected
   one); previously these reached only fetch.json.
+
+### Fixed
+
+- `probe` reports the fwupd version number (preferring the running version)
+  instead of a whole `fwupdmgr --version` record.
 
 ## 1.1.0 - 2026-09-22
 

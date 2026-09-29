@@ -380,7 +380,8 @@ def test_snapshot_round_trip_feeds_the_decoder(tmp_path):
     payload = bytearray(0x100)
     payload[0x90] = 1
     (raw_dir / filename).write_bytes(bytes(payload))
-    (tmp_path / "manifest.json").write_text(json.dumps({"format_version": 1, "variables": [
+    (tmp_path / "manifest.json").write_text(json.dumps({
+        "format_version": decode.SNAPSHOT_FORMAT_VERSION, "variables": [
         {"name": "Setup", "guid": str(fixtures.VARSTORE_GUID),
          "filename": filename, "attributes": 7, "payload_size": len(payload),
          "payload_sha256": hashlib.sha256(payload).hexdigest(), "error": None}]}))

@@ -227,8 +227,12 @@ def optional_tools() -> dict[str, str | None]:
             else:
                 lines = stdout or stderr or [path]
                 if tool == "fwupdmgr":
-                    # fwupd 2.x lists its dependencies first (libusb, ...).
-                    lines = [line for line in lines if "org.freedesktop.fwupd" in line] or lines
+                    # fwupd 2.x prints "<compile|runtime> <component> <version>" records,
+                    # dependencies first; report the running fwupd's version.
+                    records = [line.split() for line in lines]
+                    fwupd = [r for r in records if len(r) == 3 and r[1] == "org.freedesktop.fwupd"]
+                    runtime = [r for r in fwupd if r[0] == "runtime"]
+                    lines = [(runtime or fwupd)[0][2]] if fwupd else lines
                 found[tool] = lines[0]
         except (OSError, subprocess.SubprocessError) as exc:
             found[tool] = f"{path} (version check failed: {exc})"

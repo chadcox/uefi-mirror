@@ -668,9 +668,8 @@ exact-version, path, checksum, container, and parser gates described above.
 
 - **Visibility cannot always be determined.** Some firmware conditions depend
   on values or operations that cannot be evaluated safely. These settings are
-  reported as `unknown`, never guessed. The 1.0 reference export recorded
-  645 of 3073 applicable settings as unknown; newer expression evaluation may
-  reduce that count.
+  reported as `unknown`, never guessed. 645 of 3073 applicable settings remain
+  unknown on 1.1.0.
 
 - **Some menu paths may be incomplete.** Firmware sometimes links menu pages in
   ways the parser does not yet follow. On the reference firmware, 29 of 5376

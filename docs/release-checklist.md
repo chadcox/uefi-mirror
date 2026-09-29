@@ -81,8 +81,11 @@ are covered by the repository or the recorded reference-system validation.
 - [x] Fetch tests are offline and included in the existing Linux/Windows,
   Python 3.12/3.13 CI matrix.
 
-- [ ] Validate live decoding on physical Gigabyte or MSI hardware with the
-  matching firmware image before claiming support for either platform.
+- [x] Validate live decoding on physical Gigabyte hardware with the matching
+  firmware image (`ffd821d`: X870 AORUS ELITE WIFI7 ICE, F12; values
+  sanity-checked, not menu-compared).
+- [ ] Validate live decoding on physical MSI hardware with the matching
+  firmware image before claiming support for that platform.
 - [ ] Validate physical Windows collection on at least one additional board.
 
 ### Next Windows support release gate
