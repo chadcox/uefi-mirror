@@ -60,6 +60,7 @@ def test_adjust_token_privileges_checks_not_all_assigned():
 TOO_SMALL = windows.STATUS_BUFFER_TOO_SMALL - (1 << 32)
 ACCESS_DENIED = 0xC0000022 - (1 << 32)
 GUID = "ec87d643-eba4-4bb5-a1e5-3f3e36b20da9"
+ERROR_ACCESS_DENIED = 5
 
 
 class _Fn:
@@ -90,18 +91,21 @@ def native(monkeypatch):
     return state
 
 
-def _privilege_dlls(native, *, lookup_ok=True, adjust_error=0):
+def _privilege_dlls(native, *, open_ok=True, lookup_ok=True, adjust_ok=True, adjust_error=0):
     closed, adjusted = [], []
 
     def open_token(process, access, token):
         assert (process, access) == (-1, windows.TOKEN_ADJUST_PRIVILEGES | windows.TOKEN_QUERY)
+        if not open_ok:
+            native["error"] = ERROR_ACCESS_DENIED
+            return 0
         token._obj.value = 0x1234
         return 1
 
     def adjust(_token, _disable_all, privileges, *_rest):
         adjusted.append(privileges._obj.Privileges[0].Attributes)
         native["error"] = adjust_error
-        return 1
+        return int(adjust_ok)
 
     native["dlls"]["kernel32"] = _Dll(
         GetCurrentProcess=_Fn(lambda: -1),
@@ -124,15 +128,28 @@ def test_enable_privilege_enables_the_privilege_and_closes_the_token(native):
 
 @pytest.mark.parametrize(("options", "error", "match"), [
     ({"lookup_ok": False}, OSError, "LookupPrivilegeValueW failed"),
+    ({"adjust_ok": False, "adjust_error": ERROR_ACCESS_DENIED},
+     OSError, "AdjustTokenPrivileges failed"),
     ({"adjust_error": windows.ERROR_NOT_ALL_ASSIGNED}, PermissionError, "needs elevation"),
 ])
 def test_enable_privilege_closes_the_token_on_every_failure(native, options, error, match):
     closed, _adjusted = _privilege_dlls(native, **options)
 
-    with pytest.raises(error, match=match):
+    with pytest.raises(error, match=match) as raised:
         windows.enable_privilege()
 
+    assert type(raised.value) is error
     assert closed == [0x1234]
+
+
+def test_enable_privilege_closes_nothing_when_the_token_cannot_be_opened(native):
+    closed, adjusted = _privilege_dlls(native, open_ok=False)
+
+    with pytest.raises(OSError, match="OpenProcessToken failed") as raised:
+        windows.enable_privilege()
+
+    assert raised.value.errno == ERROR_ACCESS_DENIED
+    assert (closed, adjusted) == ([], [])
 
 
 def test_read_variable_doubles_the_buffer_until_the_payload_fits(native, monkeypatch):
