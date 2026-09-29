@@ -816,6 +816,36 @@ def test_fetch_cli_downloads_private_files_and_emits_clean_json(tmp_path, monkey
         assert (output / "fetch.json").stat().st_mode & 0o777 == 0o600
 
 
+def test_fetch_cli_reports_verified_publisher_checksum(tmp_path, monkeypatch):
+    _image, artifact, metadata = _fetch_inputs()
+    _fake_fetch_network(monkeypatch, artifact, metadata)
+    monkeypatch.setattr(cli.platform, "dmi", lambda: FETCH_DMI)
+
+    result = RUNNER.invoke(cli.app, ["fetch", "--output", str(tmp_path / "fw")])
+
+    assert result.exit_code == 0, result.output
+    output = ANSI.sub("", result.output)
+    assert "Publisher checksum: verified (target=artifact)" in output
+    assert "warning:" not in output
+
+
+def test_fetch_cli_surfaces_provenance_warnings_on_the_terminal(tmp_path, monkeypatch):
+    """The warnings used to reach only fetch.json; a plain fetch looked like a clean success."""
+    _image, artifact, metadata = _fetch_inputs()
+    document = json.loads(metadata)
+    for record in document["Result"]["Obj"][0]["Files"]:
+        record.pop("sha256", None)
+    _fake_fetch_network(monkeypatch, artifact, json.dumps(document).encode())
+    monkeypatch.setattr(cli.platform, "dmi", lambda: FETCH_DMI)
+
+    result = RUNNER.invoke(cli.app, ["fetch", "--output", str(tmp_path / "fw")])
+
+    assert result.exit_code == 0, result.output
+    output = ANSI.sub("", result.output)
+    assert "Publisher checksum: unavailable" in output
+    assert "warning: Publisher SHA-256 was unavailable." in output
+
+
 def test_fetch_cli_supports_arbitrary_exact_asus_model_with_canonical_provenance(
         tmp_path, monkeypatch):
     canonical_model = "PRO WS X999-SYNTHETIC"

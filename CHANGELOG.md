@@ -4,7 +4,12 @@ All notable changes to `uefi-mirror` are documented here.
 
 ## Unreleased
 
-No changes yet.
+### Changed
+
+- **fetch reports integrity on the terminal.** Human output now states the
+  publisher checksum status and prints every provenance warning (for example a
+  missing publisher SHA-256 or a BIOS version that differs from the detected
+  one); previously these reached only fetch.json.
 
 ## 1.1.0 - 2026-09-22
 

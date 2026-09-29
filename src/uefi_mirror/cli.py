@@ -314,6 +314,11 @@ def fetch(
     else:
         typer.echo(f"Fetched {release.version} to {image_path}")
         typer.echo(f"Provenance written to {manifest_path}")
+        checksum = provenance["publisher_checksum"]
+        target = f" (target={checksum['target']})" if "target" in checksum else ""
+        typer.echo(f"Publisher checksum: {checksum['status']}{target}")
+        for warning in provenance["warnings"]:
+            typer.echo(f"warning: {warning}", err=True)
 
 
 @app.command()

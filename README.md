@@ -135,6 +135,7 @@ $ uefi-mirror fetch --manufacturer ASUS \
     --output firmware/
 Fetched 2402 to firmware/ROG-STRIX-X870E-E-GAMING-WIFI-ASUS-2402.CAP
 Provenance written to firmware/fetch.json
+Publisher checksum: verified (target=artifact)
 ```
 
 This is an explicit network operation. With unambiguous ASUS retail-board DMI,
