@@ -4,7 +4,39 @@ All notable changes to `uefi-mirror` are documented here.
 
 ## Unreleased
 
-No changes yet.
+### Added
+
+- **Optional fwupd report.** `probe --fwupd` prints the host security
+  attributes and device firmware versions fwupd reports (SPI write protection,
+  SMM and debug locks, IOMMU, TPM PCR0 reconstruction, kernel lockdown, and
+  versions for components such as the AMD Secure Processor, CPU microcode, TPM,
+  SSD and USB4 controller). `snapshot --fwupd` stores the verbatim output of
+  `fwupdmgr security --json` and `fwupdmgr get-devices --json` in
+  `manifest.json` under an additive `fwupd` field, with the fwupd version and
+  the exact command. Values are attributed to fwupd, not read by uefi-mirror.
+  A missing fwupd, a failed or timed-out query, oversized output or invalid
+  JSON is recorded as unavailable with its error; the command still succeeds.
+  Both flags are off by default. Windows reports fwupd as not available.
+
+### Changed
+
+- **One process-launch helper.** `safety.run_readonly_tool` is the only code
+  that starts a process. It accepts exactly three argument lists
+  (`fwupdmgr --version`, `fwupdmgr security --json`,
+  `fwupdmgr get-devices --json`), resolves the program on `PATH`, uses no
+  shell, closes stdin, and caps each output stream at 1 MiB and each run at a
+  timeout.
+- **fwupd 1.x version.** `probe`, the snapshot manifest and the fwupd report
+  now read the version number from fwupd 1.x `daemon version:` /
+  `client version:` lines (preferring the daemon), not only from 2.x records.
+- **Optional tools other than fwupd are no longer run.** `probe` and the
+  snapshot manifest report `UEFIExtract`, `ifrextractor` and `chipsec_util` by
+  path instead of running `--version` on them.
+- **Stricter safety scan.** The read-only contract test now rejects any
+  `subprocess`, `pty` or `multiprocessing` import, any `os.system`, `os.exec*`,
+  `os.spawn*` or similar call anywhere except the launch inside
+  `run_readonly_tool`, and pins the command allowlist; a behaviour test drives
+  every launch path through a stub and checks each argument list.
 
 ## 1.2.0 - 2026-09-29
 

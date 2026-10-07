@@ -362,6 +362,39 @@ $ uefi-mirror probe
  Privileges           uid 1000 (some variables may be unreadable)
 ```
 
+Other optional tools (`UEFIExtract`, `ifrextractor`, `chipsec_util`) are listed
+by path only; they are never run. `fwupdmgr` is run for its version.
+
+Add `--fwupd` to also show what [fwupd](https://fwupd.org/) reports about the
+platform: host security attributes (HSI) and firmware versions of other
+components. These values come from fwupd's plugins, the kernel, sysfs and UEFI
+data; uefi-mirror only runs `fwupdmgr security --json` and
+`fwupdmgr get-devices --json` and displays the answer:
+
+```console
+$ uefi-mirror probe --fwupd
+…
+Reported by fwupd 2.1.7 (from its plugins, the kernel, sysfs and UEFI data); uefi-mirror did not read these values itself.
+Host security (fwupdmgr security --json)
+ HSI      Attribute                 ID                       Result       Success
+ runtime  Linux kernel lockdown     Kernel.Lockdown          not-enabled  no
+ 1        SMM locked down           Amd.SmmLocked            locked       yes
+ 2        SPI write protection      Amd.SpiWriteProtection   enabled      yes
+ 2        TPM PCR0 reconstruction   Tpm.ReconstructionPcr0   valid        yes
+ …
+Device firmware (fwupdmgr get-devices --json)
+ Device             Version      Vendor   Plugin
+ Secure Processor   00.42.00.26  AMD      pci_psp
+ TPM                6.33.0.6     AMD      tpm
+ …
+16 of 22 devices report a version
+```
+
+If fwupd is not installed, its daemon is not reachable, or a query fails, times
+out, or returns invalid JSON, the gap is printed and `probe` still succeeds.
+uefi-mirror queries fwupd on Linux only; on Windows it is reported as not
+available.
+
 ### `snapshot` — capture the current state
 
 ```console
@@ -385,6 +418,13 @@ Use `--schema schema.json` to capture only variables referenced by that schema.
 Use `--verify-stable` to read the selected variables twice and refuse a capture
 if their bytes, attributes, or read errors change between sweeps. This detects
 observed drift; it does not make UEFI reads atomic.
+
+Use `--fwupd` to also record fwupd's answers in `manifest.json` under `fwupd`:
+the output of `fwupdmgr security --json` and `fwupdmgr get-devices --json`
+stored exactly as fwupd emitted it, plus the fwupd version and each exact
+command. A failed query is stored as `available: false` with its error rather
+than a guessed value. fwupd's device list includes serial numbers and hardware
+GUIDs, so treat the manifest as private like the rest of the snapshot.
 
 ### `schema` — what does each setting *mean*?
 

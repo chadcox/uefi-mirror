@@ -8,7 +8,7 @@ import pytest
 from typer.testing import CliRunner
 
 from tests import fixtures
-from uefi_mirror import cli, decode, platform
+from uefi_mirror import cli, decode, platform, safety
 from uefi_mirror.collectors.efivarfs import Variable
 
 GUID = str(fixtures.VARSTORE_GUID)
@@ -179,3 +179,41 @@ def test_snapshot_verify_stable_refuses_a_changed_variable_before_output(tmp_pat
     assert result.exit_code != 0
     assert "changed during capture" in result.output
     assert not target.exists()
+
+
+def test_snapshot_fwupd_is_opt_in_and_stores_fwupd_json_verbatim(tmp_path, monkeypatch):
+    data = os.path.join(os.path.dirname(__file__), "data")
+    answers = {
+        ("fwupdmgr", "--version"): b"runtime   org.freedesktop.fwupd  2.1.7\n",
+        ("fwupdmgr", "security", "--json"):
+            open(os.path.join(data, "fwupd_security.json"), "rb").read(),
+        ("fwupdmgr", "get-devices", "--json"):
+            open(os.path.join(data, "fwupd_devices.json"), "rb").read(),
+    }
+    queried = []
+
+    def run(argv, **_):
+        queried.append(tuple(argv))
+        return safety.ToolResult("/usr/bin/fwupdmgr", 0, answers[tuple(argv)], b"")
+
+    monkeypatch.setattr(cli, "_live_variables", lambda _: [_live_variable("Setup", b"one")])
+    monkeypatch.setattr(platform, "summary", lambda: {})
+    monkeypatch.setattr(platform, "WINDOWS", False)
+    monkeypatch.setattr(platform.safety, "run_readonly_tool", run)
+
+    plain = tmp_path / "plain"
+    result = CliRunner().invoke(cli.app, ["snapshot", "-o", str(plain)])
+    assert result.exit_code == 0, result.output
+    assert "fwupd" not in json.loads((plain / "manifest.json").read_text())
+    assert queried == []
+
+    target = tmp_path / "with-fwupd"
+    result = CliRunner().invoke(cli.app, ["snapshot", "-o", str(target), "--fwupd"])
+    assert result.exit_code == 0, result.output
+    assert "fwupd report recorded in manifest.json" in result.output
+    recorded = json.loads((target / "manifest.json").read_text())["fwupd"]
+    assert recorded["reported_by"] == "fwupd" and recorded["version"]["output"] == "2.1.7"
+    assert recorded["security"]["command"] == ["fwupdmgr", "security", "--json"]
+    assert recorded["security"]["output"] == json.loads(answers[queried[1]])
+    assert recorded["devices"]["output"] == json.loads(answers[queried[2]])
+    assert decode.from_snapshot(str(target)).get("Setup", GUID) == b"one"

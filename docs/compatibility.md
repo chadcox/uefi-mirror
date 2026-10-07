@@ -24,6 +24,18 @@ Snapshot manifests may add `selection` (`all` or `schema`) and
 `stable_verified` fields. A scoped snapshot remains a valid snapshot but
 contains only variables declared by the selected schema; two agreeing reads
 do not make firmware capture atomic.
+`snapshot --fwupd` adds a `fwupd` object to the manifest; without the option
+the field is absent. It has `reported_by: "fwupd"` and `available`. When
+fwupd cannot be run at all (not installed, or Windows), `available` is `false`
+with an `error` string. Otherwise it holds `version`, `security` and `devices`
+records, each with the logical `command` argument list, the resolved `program`
+path when the command ran, its own `available`, and either `output` or
+`error`. `version.output` is fwupd's running version string; `security.output`
+and `devices.output` are the
+JSON objects printed by `fwupdmgr security --json` and
+`fwupdmgr get-devices --json`, stored verbatim. Their inner shape is fwupd's
+and follows fwupd's own versioning, not this format version. The values are
+reported by fwupd and are never interpreted by `export` or `diff`.
 Snapshots and exports can contain machine identifiers or boot paths and should
 be treated as private. Fetch provenance contains selected and available DMI
 identity plus source URLs and hashes, but no raw firmware variables. Schema JSON

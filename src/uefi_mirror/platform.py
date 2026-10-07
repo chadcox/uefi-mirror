@@ -1,9 +1,11 @@
 """DMI / boot-mode identity. All reads are best-effort and non-fatal."""
 
 import ctypes
+import json
 import os
 import shutil
-import subprocess
+
+from . import safety
 
 WINDOWS = os.name == "nt"
 DMI_DIR = "/sys/class/dmi/id" if not WINDOWS else None
@@ -20,8 +22,18 @@ MAX_SMBIOS_BYTES = 16 * 1024 * 1024
 ERROR_ACCESS_DENIED = 5
 ERROR_PRIVILEGE_NOT_HELD = 1314
 
-# Detection only -- we report versions, we never install or fetch these.
+# Detection only -- we never install, fetch or run these. fwupdmgr alone is
+# queried, through safety.run_readonly_tool; the rest are reported by path.
 OPTIONAL_TOOLS = ("UEFIExtract", "uefiextract", "ifrextractor", "chipsec_util", "fwupdmgr")
+TOOL_VERSION_TIMEOUT_SECONDS = 10
+# fwupd assembles these from its plugins, the kernel, sysfs and UEFI data; they
+# are recorded as fwupd reported them, never as reads made by uefi-mirror.
+FWUPD_COMMANDS = (
+    ("version", ("fwupdmgr", "--version")),
+    ("security", ("fwupdmgr", "security", "--json")),
+    ("devices", ("fwupdmgr", "get-devices", "--json")),
+)
+FWUPD_TIMEOUT_SECONDS = 30
 
 
 def dmi() -> dict[str, str]:
@@ -209,34 +221,98 @@ def firmware_attributes() -> dict[str, dict[str, str]]:
     return result
 
 
-def optional_tools() -> dict[str, str | None]:
-    found: dict[str, str | None] = {}
+def _lines(data: bytes) -> list[str]:
+    return [line.strip() for line in data.decode("utf-8", "replace").splitlines()
+            if line.strip()]
+
+
+def _fwupd_version(lines: list[str]) -> str | None:
+    """Return the running fwupd's own version from `fwupdmgr --version`.
+
+    fwupd 2.x prints "<compile|runtime> <component> <version>" records,
+    dependencies first; 1.x prints "daemon version:" and "client version:"
+    lines. Prefer the running daemon's version; anything else is unrecognised.
+    """
+    records = [line.split() for line in lines]
+    fwupd_records = [r for r in records if len(r) == 3 and r[1] == "org.freedesktop.fwupd"]
+    if fwupd_records:
+        runtime = [r for r in fwupd_records if r[0] == "runtime"]
+        return (runtime or fwupd_records)[0][2]
+    legacy = {r[0]: r[2] for r in records
+              if len(r) == 3 and r[0] in ("daemon", "client") and r[1] == "version:"}
+    return legacy.get("daemon") or legacy.get("client")
+
+
+def optional_tools() -> dict[str, str]:
+    found: dict[str, str] = {}
     for tool in OPTIONAL_TOOLS:
-        path = shutil.which(tool)
-        if path is None:
+        if tool != "fwupdmgr":
+            path = shutil.which(tool)
+            if path is not None:
+                found[tool] = path
             continue
         try:
-            proc = subprocess.run(  # noqa: S603 - fixed argv, no user input
-                [path, "--version"], capture_output=True, text=True, timeout=10, check=False
-            )
-            stdout = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
-            stderr = [line.strip() for line in proc.stderr.splitlines() if line.strip()]
-            if proc.returncode:
-                detail = (stderr or stdout or [f"exit {proc.returncode}"])[0]
-                found[tool] = f"{path} (version check failed: {detail})"
-            else:
-                lines = stdout or stderr or [path]
-                if tool == "fwupdmgr":
-                    # fwupd 2.x prints "<compile|runtime> <component> <version>" records,
-                    # dependencies first; report the running fwupd's version.
-                    records = [line.split() for line in lines]
-                    fwupd = [r for r in records if len(r) == 3 and r[1] == "org.freedesktop.fwupd"]
-                    runtime = [r for r in fwupd if r[0] == "runtime"]
-                    lines = [(runtime or fwupd)[0][2]] if fwupd else lines
-                found[tool] = lines[0]
-        except (OSError, subprocess.SubprocessError) as exc:
-            found[tool] = f"{path} (version check failed: {exc})"
+            result = safety.run_readonly_tool((tool, "--version"),
+                                              timeout=TOOL_VERSION_TIMEOUT_SECONDS)
+        except FileNotFoundError:
+            continue
+        except (OSError, ValueError) as exc:
+            found[tool] = f"version check failed: {exc}"
+            continue
+        stdout, stderr = _lines(result.stdout), _lines(result.stderr)
+        if result.returncode:
+            detail = (stderr or stdout or [f"exit {result.returncode}"])[0]
+            found[tool] = f"{result.path} (version check failed: {detail})"
+            continue
+        lines = stdout or stderr or [result.path]
+        found[tool] = _fwupd_version(lines) or lines[0]
     return found
+
+
+def _fwupd_record(command: tuple[str, ...], result: safety.ToolResult) -> dict:
+    record = {"command": list(command), "program": result.path}
+    if result.returncode:
+        detail = (_lines(result.stderr) or _lines(result.stdout) or [""])[0]
+        return {**record, "available": False,
+                "error": f"exit status {result.returncode}" + (f": {detail}" if detail else "")}
+    if command[1] == "--version":
+        lines = _lines(result.stdout)
+        version = _fwupd_version(lines)
+        if version is None:
+            first = lines[0] if lines else "no output"
+            return {**record, "available": False,
+                    "error": f"unrecognised version output: {first}"}
+        return {**record, "available": True, "output": version}
+    try:
+        output = json.loads(result.stdout)
+    except (ValueError, RecursionError) as exc:
+        return {**record, "available": False, "error": f"invalid JSON: {exc}"}
+    if not isinstance(output, dict):
+        return {**record, "available": False, "error": "unexpected JSON: expected an object"}
+    return {**record, "available": True, "output": output}
+
+
+def fwupd() -> dict:
+    """What fwupd reports about host security and device firmware, attributed to it.
+
+    Each command's JSON is kept exactly as fwupd emitted it, with the command
+    and program that produced it. A failing command is recorded with its error
+    and the others still run; nothing is inferred from a missing answer.
+    """
+    report: dict = {"reported_by": "fwupd"}
+    if WINDOWS:
+        return {**report, "available": False, "error": "fwupd is not available on Windows"}
+    records: dict[str, dict] = {}
+    for key, command in FWUPD_COMMANDS:
+        try:
+            result = safety.run_readonly_tool(command, timeout=FWUPD_TIMEOUT_SECONDS)
+        except FileNotFoundError as exc:
+            return {**report, "available": False, "error": str(exc)}
+        except (OSError, ValueError) as exc:
+            records[key] = {"command": list(command), "available": False, "error": str(exc)}
+            continue
+        records[key] = _fwupd_record(command, result)
+    return {**report, "available": True, **records}
 
 
 def summary() -> dict:

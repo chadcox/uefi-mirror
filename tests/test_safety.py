@@ -18,7 +18,7 @@ import fixtures
 SRC = pathlib.Path(__file__).resolve().parents[1] / "src"
 sys.path.insert(0, str(SRC))
 
-from uefi_mirror import cli, safety  # noqa: E402
+from uefi_mirror import cli, platform, safety  # noqa: E402
 from uefi_mirror.collectors import efivarfs  # noqa: E402
 
 PROD_FILES = [p for p in SRC.rglob("*.py")]
@@ -66,6 +66,19 @@ FIRMWARE_SETTER_SYMBOLS = (
 )
 # The intended output mutations in safety.py; anything else there is a finding.
 SAFETY_ALLOWED_MUTATIONS = ("os.makedirs", "os.mkdir", "writing os.open")
+# Starting any process is a finding everywhere except inside
+# safety.run_readonly_tool, whose argv allowlist is pinned below.
+PROCESS_MODULES = {"subprocess", "pty", "multiprocessing"}
+PROCESS_CALLS = {"os.system", "os.popen", "os.startfile", "os.posix_spawn", "os.posix_spawnp",
+                 "os.fork", "os.forkpty", "asyncio.create_subprocess_exec",
+                 "asyncio.create_subprocess_shell"}
+PROCESS_CALL_PREFIXES = ("subprocess.", "pty.", "multiprocessing.", "os.exec", "os.spawn")
+OS_PROCESS_NAMES = {name.split(".", 1)[1] for name in PROCESS_CALLS if name.startswith("os.")}
+READ_ONLY_COMMANDS = {
+    ("fwupdmgr", "--version"),
+    ("fwupdmgr", "security", "--json"),
+    ("fwupdmgr", "get-devices", "--json"),
+}
 
 
 def _call_name(node):
@@ -86,8 +99,24 @@ class WriteVisitor(ast.NodeVisitor):
     def __init__(self):
         self.findings = []
 
+    def visit_Import(self, node):
+        for alias in node.names:
+            if alias.name.split(".")[0] in PROCESS_MODULES:
+                self.findings.append((node.lineno, f"process module import {alias.name}"))
+        self.generic_visit(node)
+
+    def visit_ImportFrom(self, node):
+        module = (node.module or "").split(".")[0]
+        if module in PROCESS_MODULES or (module == "os" and any(
+                alias.name in OS_PROCESS_NAMES or alias.name.startswith(("exec", "spawn"))
+                for alias in node.names)):
+            self.findings.append((node.lineno, f"process module import from {node.module}"))
+        self.generic_visit(node)
+
     def visit_Call(self, node):
         name = _call_name(node.func)
+        if name in PROCESS_CALLS or name.startswith(PROCESS_CALL_PREFIXES):
+            self.findings.append((node.lineno, f"process launch {name}"))
         mode = None
         if name in {"open", "builtins.open", "Path.open", "pathlib.Path.open"}:
             if len(node.args) > 1:
@@ -121,17 +150,27 @@ def _scan(source):
     return visitor.findings
 
 
+def _function(tree, name):
+    return next(node for node in tree.body
+                if isinstance(node, ast.FunctionDef) and node.name == name)
+
+
 def test_production_mutation_is_confined_to_safety_helpers():
     for path in PROD_FILES:
         source = path.read_text()
         findings = _scan(source)
         if path.name == "safety.py":
             # Not a blanket skip: safety.py may only contain the known output
-            # helpers. Replace and cleanup must stay inside write_private.
-            writer = next(node for node in ast.parse(source).body
-                          if isinstance(node, ast.FunctionDef) and node.name == "write_private")
+            # helpers. Replace and cleanup must stay inside write_private, and
+            # the one process launch inside run_readonly_tool.
+            tree = ast.parse(source)
+            writer = _function(tree, "write_private")
+            runner = _function(tree, "run_readonly_tool")
             unexpected = [(line, message) for line, message in findings
                           if not (any(a in message for a in SAFETY_ALLOWED_MUTATIONS)
+                                  or message == "process module import subprocess"
+                                  or (runner.lineno <= line <= runner.end_lineno
+                                      and message == "process launch subprocess.run")
                                   or (writer.lineno <= line <= writer.end_lineno
                                       and message in ("filesystem mutation os.replace",
                                                       "filesystem mutation os.unlink")))]
@@ -164,6 +203,10 @@ def test_ast_guard_detects_every_banned_api_family():
         "os.rename('a', 'b')", "shutil.copy2('a', 'b')", "os.unlink('x')",
         "subprocess.run(['flashrom', '-w', 'bios.bin'])",
         "os.open('x', os.O_WRONLY | os.O_CREAT)",
+        "subprocess.check_output([tool, '--version'])", "import subprocess",
+        "from subprocess import run", "import subprocess as sp",
+        "os.system('fwupdmgr update')", "os.execv(path, argv)", "os.posix_spawn(p, a, e)",
+        "from os import system", "asyncio.create_subprocess_exec(tool)",
     ]
     for source in examples:
         assert _scan(source), source
@@ -188,6 +231,145 @@ def test_cli_exposes_no_mutating_command():
     out = _run_cli("--help", check=True).stdout
     for word in ("set", "write", "restore", "flash", "unlock", "erase", "modify"):
         assert not re.search(rf"^\s+{word}\b", out, re.M | re.I), f"mutating command: {word}"
+
+# ---------------------------------------------------------------- processes
+
+class _FakeRun:
+    """Stands in for subprocess.run: records the launch and writes canned output
+    into the stdout/stderr descriptors it is handed; never runs anything.
+
+    An output of type int means "keep writing that many bytes"; `broken`
+    records whether the reader closed the pipe first."""
+
+    launches = []
+    outputs = {}
+    broken = False
+
+    @staticmethod
+    def _write(fd, data):
+        chunks = [b"x" * 4096] * (data // 4096) if isinstance(data, int) else [data]
+        try:
+            for chunk in chunks:
+                view = memoryview(chunk)
+                while view:
+                    view = view[os.write(fd, view):]
+        except OSError:
+            _FakeRun.broken = True
+
+    def __call__(self, argv, **kwargs):
+        _FakeRun.launches.append((list(argv), kwargs))
+        command = (os.path.basename(argv[0]), *argv[1:])
+        stdout, stderr, returncode, hangs = _FakeRun.outputs.get(command, (b"", b"", 0, False))
+        if hangs:
+            raise subprocess.TimeoutExpired(argv, kwargs.get("timeout"))
+        self._write(kwargs["stdout"], stdout)
+        self._write(kwargs["stderr"], stderr)
+        return subprocess.CompletedProcess(argv, returncode)
+
+
+def _with_fake_processes(outputs, action, which=lambda name: f"/fake/bin/{name}"):
+    real = (safety.subprocess.run, safety.shutil.which, platform.shutil.which)
+    _FakeRun.launches, _FakeRun.outputs, _FakeRun.broken = [], outputs, False
+    safety.subprocess.run = _FakeRun()
+    safety.shutil.which = platform.shutil.which = which
+    try:
+        return action()
+    finally:
+        safety.subprocess.run, safety.shutil.which, platform.shutil.which = real
+
+
+def _fwupd_outputs():
+    data = pathlib.Path(__file__).resolve().parent / "data"
+    return {
+        ("fwupdmgr", "--version"): (b"runtime   org.freedesktop.fwupd  2.1.7\n", b"", 0, False),
+        ("fwupdmgr", "security", "--json"):
+            ((data / "fwupd_security.json").read_bytes(), b"", 0, False),
+        ("fwupdmgr", "get-devices", "--json"):
+            ((data / "fwupd_devices.json").read_bytes(), b"", 0, False),
+    }
+
+
+def test_every_process_launch_is_an_exact_read_only_command():
+    """Drive every production path that starts a process with every optional tool
+    present; each launch must be one reviewed argv, shell-less, stdin closed."""
+    assert safety.READONLY_TOOL_COMMANDS == READ_ONLY_COMMANDS
+
+    def everything():
+        platform.summary()
+        platform.fwupd()
+        with tempfile.TemporaryDirectory() as d:
+            snapshot = getattr(cli.snapshot, "__wrapped__", cli.snapshot)
+            snapshot(output=os.path.join(d, "snap"), efivars=d, schema_file=None,
+                     verify_stable=False, include_fwupd=True)
+
+    _with_fake_processes(_fwupd_outputs(), everything)
+    assert _FakeRun.launches
+    for argv, kwargs in _FakeRun.launches:
+        command = (os.path.basename(argv[0]), *argv[1:])
+        assert command in READ_ONLY_COMMANDS, argv
+        assert argv[0] == f"/fake/bin/{command[0]}", argv
+        assert not kwargs.get("shell") and kwargs.get("stdin") == subprocess.DEVNULL, kwargs
+        assert kwargs.get("timeout"), kwargs
+    launched = {(os.path.basename(a[0]), *a[1:]) for a, _ in _FakeRun.launches}
+    if os.name != "nt":
+        assert launched == READ_ONLY_COMMANDS, launched
+
+
+def test_unreviewed_commands_are_refused_before_lookup():
+    def refuse(*_args, **_kwargs):
+        raise AssertionError("reached lookup or launch")
+
+    for command in (("fwupdmgr", "update"), ("fwupdmgr", "security"),
+                    ("fwupdmgr", "security", "--json", "--force"),
+                    ("fwupdmgr", "install", "x.cab"), ("fwupdtool", "--version"),
+                    ("chipsec_util", "--version"), ("flashrom", "--version"),
+                    ("/usr/bin/fwupdmgr", "--version"), ("sh", "-c", "fwupdmgr --version")):
+        try:
+            _with_fake_processes({}, lambda: safety.run_readonly_tool(command), which=refuse)
+        except ValueError:
+            continue
+        raise AssertionError(f"accepted {command}")
+    assert not _FakeRun.launches
+
+
+def test_tool_output_is_capped_and_the_pipe_closed():
+    for stream in (0, 1):
+        flood = [b"", b"", 0, False]
+        flood[stream] = 64 << 20  # far beyond any pipe buffer
+        outputs = {("fwupdmgr", "--version"): tuple(flood)}
+        try:
+            _with_fake_processes(outputs, lambda: safety.run_readonly_tool(
+                ("fwupdmgr", "--version"), limit=16))
+        except ValueError as exc:
+            assert "16 byte limit" in str(exc)
+        else:
+            raise AssertionError("oversized output accepted")
+        assert _FakeRun.broken, "tool could keep writing after the cap"
+
+
+def test_tool_timeout_is_enforced():
+    outputs = {("fwupdmgr", "security", "--json"): (b"", b"", 0, True)}
+    try:
+        _with_fake_processes(outputs, lambda: safety.run_readonly_tool(
+            ("fwupdmgr", "security", "--json"), timeout=0.01))
+    except TimeoutError:
+        assert _FakeRun.launches[0][1]["timeout"] == 0.01
+    else:
+        raise AssertionError("hung tool was not timed out")
+
+
+def test_missing_tool_and_nonzero_exit_are_reported_not_hidden():
+    try:
+        _with_fake_processes({}, lambda: safety.run_readonly_tool(("fwupdmgr", "--version")),
+                             which=lambda name: None)
+    except FileNotFoundError:
+        pass
+    else:
+        raise AssertionError("missing tool was not reported")
+    outputs = {("fwupdmgr", "get-devices", "--json"): (b"", b"daemon down\n", 1, False)}
+    result = _with_fake_processes(outputs, lambda: safety.run_readonly_tool(
+        ("fwupdmgr", "get-devices", "--json")))
+    assert (result.returncode, result.stderr) == (1, b"daemon down\n")
 
 # ---------------------------------------------------------------- behaviour
 
@@ -973,7 +1155,8 @@ def test_end_to_end_on_a_fake_efivarfs():
 
         out = os.path.join(d, "snap")
         snapshot = getattr(cli.snapshot, "__wrapped__", cli.snapshot)
-        snapshot(output=out, efivars=fake, schema_file=None, verify_stable=False)
+        snapshot(output=out, efivars=fake, schema_file=None, verify_stable=False,
+                 include_fwupd=False)
 
         manifest = json.load(open(os.path.join(out, "manifest.json")))
         names = {(v["name"], v["guid"]): v for v in manifest["variables"]}

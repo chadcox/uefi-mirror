@@ -7,6 +7,7 @@ import os
 import typer
 from rich.console import Console
 from rich.table import Table
+from rich.text import Text
 
 from . import __version__, decode, platform, report
 from . import diff as diff_mod
@@ -178,8 +179,77 @@ def _check_image(schema_result, store: decode.VariableStore, image: bytes | None
     return result
 
 
+
+FWUPD_HELP = ("Also record what fwupd reports: host security attributes and device "
+              "firmware versions. Runs fwupdmgr's read-only JSON queries.")
+
+
+def _fwupd_problems(report: dict) -> list[str]:
+    if not report["available"]:
+        return [f"fwupd not available: {report['error']}"]
+    return [f"{' '.join(record['command'])}: {record['error']}"
+            for record in (report["version"], report["security"], report["devices"])
+            if not record["available"]]
+
+
+def _cell(value) -> Text:
+    return Text("?" if value is None else str(value))
+
+
+def _print_fwupd(report: dict) -> None:
+    if not report["available"]:
+        console.print(Text(f"\nfwupd not available: {report['error']}", style="yellow"))
+        return
+    version = report["version"]
+    source = f"fwupd {version['output']}" if version["available"] else "fwupd"
+    console.print(Text(f"\nReported by {source} (from its plugins, the kernel, sysfs and "
+                       "UEFI data); uefi-mirror did not read these values itself."))
+    for problem in _fwupd_problems(report):
+        console.print(Text(f"unavailable: {problem}", style="yellow"))
+
+    security = report["security"]
+    if security["available"]:
+        attributes = security["output"].get("SecurityAttributes")
+        attributes = [a for a in attributes if isinstance(a, dict)] \
+            if isinstance(attributes, list) else []
+        table = Table(title=f"Host security ({' '.join(security['command'])})",
+                      title_justify="left")
+        for column in ("HSI", "Attribute", "ID", "Result", "Success"):
+            table.add_column(column)
+        for attribute in attributes:
+            flags = attribute.get("Flags") if isinstance(attribute.get("Flags"), list) else []
+            level = attribute.get("HsiLevel")
+            if level is None and "runtime-issue" in flags:
+                level = "runtime"
+            appstream = attribute.get("AppstreamId")
+            if isinstance(appstream, str):
+                appstream = appstream.removeprefix("org.fwupd.hsi.")
+            table.add_row(_cell(level), _cell(attribute.get("Name")), _cell(appstream),
+                          _cell(attribute.get("HsiResult")),
+                          Text("yes" if "success" in flags else "no"))
+        console.print(table)
+
+    devices_record = report["devices"]
+    if devices_record["available"]:
+        devices = devices_record["output"].get("Devices")
+        devices = [d for d in devices if isinstance(d, dict)] if isinstance(devices, list) else []
+        versioned = [d for d in devices if d.get("Version") is not None]
+        table = Table(title=f"Device firmware ({' '.join(devices_record['command'])})",
+                      title_justify="left",
+                      caption=f"{len(versioned)} of {len(devices)} devices report a version",
+                      caption_justify="left")
+        for column in ("Device", "Version", "Vendor", "Plugin"):
+            table.add_column(column)
+        for device in versioned:
+            table.add_row(_cell(device.get("Name")), _cell(device.get("Version")),
+                          _cell(device.get("Vendor")), _cell(device.get("Plugin")))
+        console.print(table)
+
+
 @app.command()
-def probe() -> None:
+def probe(
+    include_fwupd: bool = typer.Option(False, "--fwupd", help=FWUPD_HELP),
+) -> None:
     """Report platform, firmware and tool availability. Changes nothing."""
     info = platform.summary()
     dmi = info["dmi"]
@@ -231,6 +301,8 @@ def probe() -> None:
         table.add_row("Privileges", "root" if info["euid"] == 0 else f"uid {info['euid']}"
                                     " (some variables may be unreadable)")
     console.print(table)
+    if include_fwupd:
+        _print_fwupd(platform.fwupd())
 
 
 @app.command()
@@ -329,6 +401,7 @@ def snapshot(
         None, "--schema", help="Capture only variables declared by this saved schema."),
     verify_stable: bool = typer.Option(
         False, "--verify-stable", help="Read twice and refuse variables that change during capture."),
+    include_fwupd: bool = typer.Option(False, "--fwupd", help=FWUPD_HELP),
 ) -> None:
     """Copy every readable UEFI variable into a private directory."""
     selected = None
@@ -380,6 +453,8 @@ def snapshot(
         "platform": platform.summary(),
         "variables": [v.manifest() for v in variables],
     }
+    if include_fwupd:
+        manifest["fwupd"] = platform.fwupd()
     _write_output(
         os.path.join(output, "manifest.json"),
         json.dumps(manifest, indent=2, sort_keys=True).encode() + b"\n",
@@ -388,6 +463,12 @@ def snapshot(
     console.print(f"Snapshot: {len(variables) - len(failed)} variables -> {output}")
     for var in failed:
         console.print(f"  [yellow]skipped[/] {var.filename}: {var.error}")
+    if include_fwupd:
+        problems = _fwupd_problems(manifest["fwupd"])
+        console.print("fwupd report recorded in manifest.json" if not problems else
+                      "fwupd report recorded with gaps:")
+        for problem in problems:
+            console.print(Text(f"  {problem}", style="yellow"))
 
 
 @app.command()

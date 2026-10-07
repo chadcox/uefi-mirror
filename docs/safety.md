@@ -91,6 +91,34 @@ vendor server or local DNS trustworthy. A verified publisher checksum proves
 only that the downloaded bytes match the checksum's documented target; parsing
 settings does not prove those bytes are installed on the machine.
 
+## External commands
+
+`safety.run_readonly_tool` is the only code that starts a process. It runs an
+argument list only if it equals one of these exactly:
+
+| Command | Used by | What it does |
+|---|---|---|
+| `fwupdmgr --version` | `probe`, `snapshot` (tool versions) | Prints fwupd component versions. |
+| `fwupdmgr security --json` | `probe --fwupd`, `snapshot --fwupd` | Prints fwupd's host security attributes. |
+| `fwupdmgr get-devices --json` | `probe --fwupd`, `snapshot --fwupd` | Prints fwupd's device list and firmware versions. |
+
+None of these flashes, installs, enables, unlocks or reconfigures anything,
+and none needs root. Any other argument list, including one that merely adds
+an option, raises before the program is looked up. The program is resolved
+with `shutil.which` and started by `subprocess.run` without a shell and with
+stdin closed. stdout and stderr go to pipes read concurrently and capped at
+`MAX_TOOL_OUTPUT_BYTES` (1 MiB) each; past the cap the read end is closed, so
+the tool's further writes fail rather than accumulate, and the call fails. The
+process is killed at the timeout (10 seconds for `--version`, 30 seconds for
+the JSON queries). `fwupdtool`, `efibootmgr`, `flashrom` and `chipsec_util`
+are never run; other optional analysis tools are located by path only.
+
+fwupd builds its answers from its plugins, the kernel, sysfs and UEFI data, so
+the `--fwupd` output is attributed to fwupd and stored verbatim; uefi-mirror
+does not read those hardware registers itself. `fwupdmgr` talks to the local
+fwupd daemon, which the system may start on demand; these queries do not use
+the network.
+
 ## Writes that do happen
 
 Exactly two functions mutate the filesystem, `safety.write_private` (file
@@ -139,7 +167,10 @@ The suite includes static scans of the shipped source and behavioral checks:
 
 | Test | What it prevents |
 |---|---|
-| `production_mutation_is_confined_to_safety_helpers` | An AST visitor rejects writing open modes, `Path.write_*`, filesystem mutation/copy APIs, and firmware-writing subprocesses. `safety.write_private` is the sole allowlisted exception. |
+| `production_mutation_is_confined_to_safety_helpers` | An AST visitor rejects writing open modes, `Path.write_*`, filesystem mutation/copy APIs, firmware-writing subprocesses, and any process launch (`subprocess`/`pty`/`multiprocessing` imports, `os.system`, `os.exec*`, `os.spawn*`, `asyncio` subprocesses). `safety.write_private` is the sole allowlisted writer and `safety.run_readonly_tool` the sole allowlisted launcher. |
+| `every_process_launch_is_an_exact_read_only_command` | Widening the command allowlist, or any production path (`platform.summary`, `platform.fwupd`, `snapshot --fwupd`) starting a command that is not an exact reviewed argument list, or starting one with a shell or an open stdin. The launch is stubbed; nothing runs. |
+| `unreviewed_commands_are_refused_before_lookup` | `fwupdmgr update`/`install`, extra options, absolute paths, `sh -c`, or other tools reaching `PATH` lookup or launch. |
+| `tool_output_is_capped_and_the_pipe_closed` / `tool_timeout_is_enforced` | Unbounded tool output, a tool that keeps writing past the cap, or a hung tool stalling the command. |
 | `no_sys_firmware_path_is_ever_written` | A `/sys/firmware` path ever being paired with an opening-for-write. |
 | `read_flags_are_hardened` | Linux `RO_FLAGS` losing `O_NOFOLLOW`/`O_CLOEXEC`, or gaining a write bit. |
 | `cli_exposes_no_mutating_command` | A subcommand named `set`, `write`, `restore`, `flash`, `unlock`, `erase` or `modify` reaching the CLI. |

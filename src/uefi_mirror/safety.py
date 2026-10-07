@@ -7,9 +7,12 @@ import http.client
 import ipaddress
 import os
 import re
+import shutil
 import socket
 import ssl
 import stat
+import subprocess
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -29,7 +32,20 @@ MAX_HTTP_REQUESTS = 20
 HTTP_TIMEOUT_SECONDS = 15
 FETCH_DEADLINE_SECONDS = 180
 HTTP_READ_CHUNK = 64 << 10
+MAX_TOOL_OUTPUT_BYTES = 1 << 20
+TOOL_TIMEOUT_SECONDS = 30
+TOOL_DRAIN_GRACE_SECONDS = 1
+TOOL_READ_CHUNK = 64 << 10
 WINDOWS = os.name == "nt"
+
+# The only external commands uefi-mirror may start, as exact argument vectors.
+# Each one only reports: fwupd's version, its host security attributes, or its
+# device list. None flashes, installs, enables, unlocks or reconfigures.
+READONLY_TOOL_COMMANDS = frozenset({
+    ("fwupdmgr", "--version"),
+    ("fwupdmgr", "security", "--json"),
+    ("fwupdmgr", "get-devices", "--json"),
+})
 
 # A firmware variable name is attacker-influenced on Windows (it comes back from
 # the firmware, not the OS), and snapshot writes it as a filename. Validate it as
@@ -64,6 +80,14 @@ class HttpBudget:
 class HttpResult:
     data: bytes
     final_url: str
+
+
+@dataclass(frozen=True)
+class ToolResult:
+    path: str
+    returncode: int
+    stdout: bytes
+    stderr: bytes
 
 
 def _validate_https_url(url: str, allowed_hosts: frozenset[str]) -> None:
@@ -570,6 +594,62 @@ def read_bounded(path: str, limit: int = MAX_VARIABLE_BYTES) -> bytes:
         raise ValueError(f"{path}: exceeds {limit} byte limit")
     finally:
         os.close(fd)
+
+
+def run_readonly_tool(argv, timeout: float = TOOL_TIMEOUT_SECONDS,
+                      limit: int = MAX_TOOL_OUTPUT_BYTES) -> ToolResult:
+    """Run one reviewed read-only command; the only place a process is started.
+
+    `argv` must equal an entry of READONLY_TOOL_COMMANDS exactly. The program is
+    resolved with shutil.which and started by subprocess.run without a shell
+    and with stdin closed. stdout and stderr go to pipes drained concurrently
+    and capped at `limit` bytes each: past the cap the read end is closed, so
+    further writes fail instead of accumulating. Raises ValueError for an
+    unreviewed command or oversized output, FileNotFoundError when the program
+    is not on PATH, and TimeoutError when it does not finish within `timeout`
+    seconds (subprocess.run kills it). A nonzero exit is returned, not raised,
+    so the caller can record it.
+    """
+    command = tuple(argv)
+    if command not in READONLY_TOOL_COMMANDS:
+        raise ValueError(f"refusing unreviewed command {' '.join(map(str, command))!r}")
+    path = shutil.which(command[0])
+    if path is None:
+        raise FileNotFoundError(f"{command[0]} not found on PATH")
+    captured = (bytearray(), bytearray())
+    overflow = threading.Event()
+
+    def drain(fd: int, sink: bytearray) -> None:
+        try:
+            while chunk := os.read(fd, TOOL_READ_CHUNK):
+                if len(sink) + len(chunk) > limit:
+                    overflow.set()
+                    return
+                sink += chunk
+        finally:
+            os.close(fd)
+
+    (out_read, out_write), (err_read, err_write) = os.pipe(), os.pipe()
+    readers = [threading.Thread(target=drain, args=pair, daemon=True)
+               for pair in zip((out_read, err_read), captured)]
+    for reader in readers:
+        reader.start()
+    try:
+        completed = subprocess.run([path, *command[1:]], stdin=subprocess.DEVNULL,
+                                   stdout=out_write, stderr=err_write, shell=False,
+                                   timeout=timeout, check=False)
+    except subprocess.TimeoutExpired:
+        completed = None
+    finally:
+        os.close(out_write)
+        os.close(err_write)
+    for reader in readers:
+        reader.join(TOOL_DRAIN_GRACE_SECONDS)
+    if overflow.is_set():
+        raise ValueError(f"{path}: output exceeds {limit} byte limit")
+    if completed is None or any(reader.is_alive() for reader in readers):
+        raise TimeoutError(f"{path} did not finish within {timeout} seconds")
+    return ToolResult(path, completed.returncode, bytes(captured[0]), bytes(captured[1]))
 
 
 def require_empty_output_dir(path: str) -> None:
