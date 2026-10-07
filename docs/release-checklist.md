@@ -116,12 +116,15 @@ before/after diff and clean-build checks remain release gates.
 - [ ] Push a `vX.Y.Z` tag matching `pyproject.toml`, `__version__`, and the
   `CHANGELOG.md` heading. The `release` workflow re-runs the safety suite,
   tests, and lint, builds the sdist and wheel, smoke-installs the wheel,
-  publishes to PyPI through trusted publishing, then creates the GitHub
-  Release for the tag (title `uefi-mirror <version>`, notes = that version's
-  `CHANGELOG.md` section, assets = the built wheel and sdist), so tag, PyPI
-  upload, and release page cannot drift.
-  1.2.0 was published this way on 2026-09-29 (release run 36644311803, approved
-  by `chadcox`); `pip install uefi-mirror==1.2.0` was checked in a fresh venv.
-  Its GitHub Release page was missing and was created by hand on 2026-10-07
-  from that run's `dist` artifact; both asset SHA-256s match the PyPI 1.2.0
-  files exactly.
+  and publishes to PyPI through trusted publishing. A `release` job added
+  on 2026-10-07 (commit `1577952`, not yet exercised by a real tag) then
+  creates the GitHub Release for the tag (title `uefi-mirror <version>`,
+  notes = that version's `CHANGELOG.md` section, assets = the built wheel
+  and sdist); expected to keep tag, PyPI upload, and release page in sync
+  from the next tag onward.
+  1.2.0 was published on 2026-09-29 by the then-current workflow (release
+  run 36644311803, approved by `chadcox`), which stopped at the PyPI
+  upload and created no release page; `pip install uefi-mirror==1.2.0`
+  was checked in a fresh venv. The missing v1.2.0 release page was created
+  by hand on 2026-10-07 from that run's `dist` artifact; both asset
+  SHA-256s match the PyPI 1.2.0 files exactly.
