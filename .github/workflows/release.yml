@@ -52,3 +52,35 @@ jobs:
           name: dist
           path: dist/
       - uses: pypa/gh-action-pypi-publish@release/v1
+
+  release:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Extract this version's changelog section
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="$version" '
+            index($0, "## " v " ") == 1 {p=1}
+            p && /^## / && index($0, "## " v " ") != 1 {exit}
+            p' CHANGELOG.md > notes.md
+          test -s notes.md
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME already exists; not recreating it."
+          else
+            gh release create "$GITHUB_REF_NAME" --verify-tag \
+              --title "uefi-mirror ${GITHUB_REF_NAME#v}" \
+              --notes-file notes.md
+          fi
+          gh release upload "$GITHUB_REF_NAME" dist/* --clobber
