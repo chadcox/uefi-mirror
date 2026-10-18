@@ -647,13 +647,15 @@ def provenance_document(
 
 def provenance_evidence(
     data: bytes, image_sha256: str, hash_source: str, dmi: Mapping[str, str],
-) -> tuple[list[str], list[str]]:
+) -> tuple[list[str], list[str], bool]:
     """Compare a saved download fetch.json with an image and a machine's DMI.
 
-    Returns (evidence, problems). fetch.json is a local, user-editable record,
-    so agreement is evidence only and never proves the installed release; a
-    definite disagreement is a problem. Raises ValueError for anything that is
-    not a current-format download record.
+    Returns (evidence, problems, matches). fetch.json is a local, user-editable
+    record, so agreement is evidence only and never proves the installed
+    release; a definite disagreement is a problem. `matches` is True only when
+    the image SHA-256 equals the recorded one and both the fetched model and
+    BIOS version are present and equal to the machine's DMI values. Raises
+    ValueError for anything that is not a current-format download record.
     """
     try:
         document = json.loads(data)
@@ -678,10 +680,12 @@ def provenance_evidence(
 
     evidence: list[str] = []
     problems: list[str] = []
+    sha_matches = False
     if not image_sha256:
         problems.append("schema records no image SHA-256 to compare with fetch.json")
     elif hmac.compare_digest(image_sha256.casefold(), recorded_sha.casefold()):
         evidence.append(f"image SHA-256 {hash_source} matches fetch.json")
+        sha_matches = True
     else:
         problems.append(f"image SHA-256 {hash_source} differs from fetch.json "
                         f"({image_sha256} != {recorded_sha})")
@@ -694,22 +698,26 @@ def provenance_evidence(
 
     live_model = _dmi_text(dmi.get("board_name")) or _dmi_text(dmi.get("product_name"))
     live_version = _dmi_text(dmi.get("bios_version"))
+    identity_matches = True
     for label, recorded, live in (("model", identity.get("model"), live_model),
                                   ("BIOS version", identity.get("bios_version"),
                                    live_version)):
         recorded = _text(recorded)
         if not recorded:
+            identity_matches = False
             evidence.append(f"fetch.json records no {label}")
         elif not live:
+            identity_matches = False
             evidence.append(f"no machine {label} to compare with fetch.json {recorded!r}")
         elif recorded.casefold() == live.casefold():
             evidence.append(f"fetch.json {label} {recorded!r} matches this machine")
         else:
+            identity_matches = False
             problems.append(f"fetch.json {label} {recorded!r} differs from this "
                             f"machine's {live!r}")
     evidence.append("fetch.json is a local record and cannot prove the image is the "
                     "installed firmware release")
-    return evidence, problems
+    return evidence, problems, sha_matches and identity_matches
 
 
 def select_release(releases: list[Release], requested_version: str) -> Release:

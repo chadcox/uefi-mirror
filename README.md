@@ -195,6 +195,10 @@ $ uefi-mirror export BIOS.CAP --format html --output bios.html
 The compatibility line reports how safely the selected schema describes the
 collected variables:
 
+- `matched` — a `fetch.json` written by `uefi-mirror fetch` attests that this
+  byte-for-byte image (SHA-256) is the release that was downloaded for this
+  board and BIOS version. That is vendor-attested provenance, not a
+  cryptographic proof of what the machine is running.
 - `unverified` — no definite layout conflict was found, but nothing
   independently verifies that the image is the installed firmware release.
   A board model embedded in the image and a BIOS version in the filename
@@ -203,16 +207,14 @@ collected variables:
 - `mismatch` — the image cannot safely describe these variables. The command
   stops before writing a report.
 
-`matched` is reserved for a future check that can verify image identity
-independently; no command emits it today.
-
 When a `fetch.json` saved by `uefi-mirror fetch` sits beside the image,
 `export` compares it with the image and the machine automatically; use
-`--provenance PATH` for a manifest stored elsewhere. Matching image SHA-256,
-model and BIOS version are added as evidence only; a local manifest cannot
-prove identity, so the status stays `unverified`. Any disagreement is a
-`mismatch`, which catches exporting against a stale download or another
-board's image:
+`--provenance PATH` for a manifest stored elsewhere. `matched` requires all
+three: the image SHA-256 equals the recorded one, the fetched model equals the
+machine's board name, and the fetched BIOS version equals the machine's
+firmware version. A record or a machine that cannot supply one of those
+comparisons stays `unverified`. Any disagreement is a `mismatch`, which catches
+exporting against a stale download or another board's image:
 
 ```console
 $ uefi-mirror export firmware/BIOS.CAP -o bios.json   # checks firmware/fetch.json
@@ -224,10 +226,10 @@ values.
 
 When decoding from a saved schema JSON, variable identities, sizes and enum
 values are still checked against the live machine. A real layout conflict still
-stops the run, and a clean check reads `unverified` whether the schema came
-from an image or from JSON, because neither can prove which board its source
-image belonged to. A filename can suggest a BIOS version and is reported as
-weak evidence; it is never proof.
+stops the run, and a clean check reads `unverified` — even beside a matching
+`fetch.json`, because a saved schema records its own image hash and cannot show
+that these bytes were read from that image. A filename can suggest a BIOS
+version and is reported as weak evidence; it is never proof.
 
 In this README and the CLI, “changed” means “different from the
 firmware-declared default.” It does not prove that a person changed the value.
@@ -279,8 +281,8 @@ it would have been from the image. It describes firmware, not your machine: it
 contains no live values and is safe to share, unlike a snapshot.
 
 One caveat: a schema JSON cannot prove which board it came from, so
-compatibility is `unverified` at best (step 3). Where certainty matters, decode
-from the image itself.
+compatibility stays `unverified` however well its provenance agrees (step 3).
+Where certainty matters, decode from the image itself.
 
 ### Work with another machine offline
 
@@ -332,7 +334,10 @@ contains only the original firmware-image basename and `fetch.json`, both
 private. The manifest records URLs, selected and detected identity, artifact
 and image hashes, checksum scope, and parsing results. Successful parsing and a
 verified download checksum do **not** prove that the image is the firmware
-installed on the machine; that status remains `unverified`.
+installed on the machine. `export` later compares that manifest with the image
+it decoded and the machine's own board name and BIOS version, and reports
+`matched` only when all three agree; that is provenance agreement, not proof of
+what is flashed.
 
 Network limits are 4 MiB metadata, 128 MiB artifact, 128 MiB extracted image,
 128 ZIP entries, 256 MiB total advertised ZIP contents, 5 redirects per

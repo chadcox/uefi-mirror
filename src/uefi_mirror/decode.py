@@ -216,8 +216,8 @@ def check_compatibility(settings: list[Setting], store: VariableStore,
     absence/size and enum values catch definite layout incompatibility.
 
     The status is 'mismatch' when a conflict is found and 'unverified'
-    otherwise. The 'matched' status is reserved for a future check that can
-    verify image identity independently; it is not emitted today.
+    otherwise. This check never emits 'matched': that status requires fetch.json
+    provenance, which `export` applies through `fetch.provenance_evidence`.
 
     `image` is None when the schema was loaded from JSON rather than parsed
     from firmware. Every check that can declare a mismatch still runs; only

@@ -81,9 +81,18 @@ Commands parse the image path supplied by the user; only `export` loads a
 manifest — the `fetch.json` beside the image by default, or `--provenance
 PATH` — and only as compatibility evidence. It accepts a current
 format download record and rejects resolve documents and other format versions.
-Agreement between the manifest's image SHA-256, model and BIOS version and the
-image and machine adds evidence lines but never raises the status above
-`unverified`; a disagreement is a `mismatch` problem. A successful `fetch --json` wrapper has `operation: "fetch"`, saved
+Export compatibility reports three statuses: `mismatch`, `unverified`, and
+`matched`. `matched` is emitted only when the manifest is a current-format
+download record, the SHA-256 of the bytes actually parsed equals the manifest's
+recorded image SHA-256, and both the fetched model and fetched BIOS version are
+present and equal to the machine's board name (or product name, when no board
+name is available) and BIOS version, with no other problem found. A record or a
+machine that cannot supply one of those comparisons stays `unverified`, as does
+any schema loaded from schema JSON, whose recorded image hash is
+self-attestation. Agreement is provenance, not proof that the image is what the
+machine runs; a disagreement is a `mismatch` problem. `matched` is an added
+status value in export format 3; readers that only understand the older two
+must treat it as a non-`mismatch` status rather than fail. A successful `fetch --json` wrapper has `operation: "fetch"`, saved
 paths, and its format-2 provenance; `fetch --resolve-only --json` has
 `operation: "resolve"` and selection metadata but no saved paths or computed
 artifact/image hashes. Neither shape claims the downloaded image is the

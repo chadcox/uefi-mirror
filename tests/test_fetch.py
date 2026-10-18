@@ -923,8 +923,10 @@ def test_fetched_image_flows_through_existing_schema_and_export(tmp_path, monkey
         "-o", str(export_path),
     ])
     assert export_result.exit_code == 0, export_result.output
+    # fetch.json sits beside the image, so the closed fetch -> export loop attests
+    # the match without any extra flag.
     assert json.loads(export_path.read_text())["image"]["compatibility"]["status"] == (
-        "unverified")
+        "matched")
     assert len(calls) == 2  # Existing schema/export commands remain offline.
 
 
@@ -946,7 +948,7 @@ def _export_with_provenance(output, snapshot, provenance, *extra):
     ])
 
 
-def test_matching_provenance_is_evidence_and_never_upgrades_to_matched(tmp_path, monkeypatch):
+def test_matching_provenance_upgrades_the_export_to_matched(tmp_path, monkeypatch):
     output, snapshot = _fetched_with_snapshot(tmp_path, monkeypatch)
     export_path = tmp_path / "export.json"
 
@@ -955,12 +957,86 @@ def test_matching_provenance_is_evidence_and_never_upgrades_to_matched(tmp_path,
 
     assert result.exit_code == 0, result.output
     compatibility = json.loads(export_path.read_text())["image"]["compatibility"]
-    assert compatibility["status"] == "unverified"
+    assert compatibility["status"] == "matched"
     assert compatibility["problems"] == []
     evidence = compatibility["evidence"]
     assert "image SHA-256 computed from the image matches fetch.json" in evidence
     assert "fetch.json BIOS version '2402' matches this machine" in evidence
+    assert any("matches this image and this machine" in line for line in evidence)
     assert any("cannot prove the image is the installed" in line for line in evidence)
+
+
+def test_fetch_json_beside_the_image_upgrades_without_a_flag(tmp_path, monkeypatch):
+    output, snapshot = _fetched_with_snapshot(tmp_path, monkeypatch)
+    export_path = tmp_path / "export.json"
+
+    result = RUNNER.invoke(cli.app, [
+        "export", str(output / "BIOS.CAP"), "--snapshot", str(snapshot),
+        "-o", str(export_path)])
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(export_path.read_text())["image"]["compatibility"]["status"] == (
+        "matched")
+
+
+@pytest.mark.parametrize("adjust", [
+    lambda manifest: manifest["selected_identity"].__setitem__("model", ""),
+    lambda manifest: manifest["selected_identity"].__setitem__("bios_version", ""),
+])
+def test_incomplete_provenance_stays_unverified(tmp_path, monkeypatch, adjust):
+    output, snapshot = _fetched_with_snapshot(tmp_path, monkeypatch)
+    manifest = json.loads((output / "fetch.json").read_text())
+    adjust(manifest)
+    partial = tmp_path / "partial.json"
+    partial.write_text(json.dumps(manifest))
+    export_path = tmp_path / "export.json"
+
+    result = _export_with_provenance(output, snapshot, partial, "-o", str(export_path))
+
+    assert result.exit_code == 0, result.output
+    compatibility = json.loads(export_path.read_text())["image"]["compatibility"]
+    assert compatibility["status"] == "unverified"
+    assert compatibility["problems"] == []
+    assert any("records no" in line for line in compatibility["evidence"])
+
+
+@pytest.mark.parametrize("missing_machine_value", ["board_name", "bios_version"])
+def test_a_machine_that_cannot_confirm_both_values_stays_unverified(
+        tmp_path, monkeypatch, missing_machine_value):
+    dmi = {key: value for key, value in FETCH_DMI.items()
+           if key != missing_machine_value}
+    if missing_machine_value == "board_name":
+        dmi.pop("product_name")  # a product name from another board is not a match
+    output, snapshot = _fetched_with_snapshot(tmp_path, monkeypatch, dmi)
+    export_path = tmp_path / "export.json"
+
+    result = _export_with_provenance(output, snapshot, output / "fetch.json",
+                                     "-o", str(export_path))
+
+    assert result.exit_code == 0, result.output
+    compatibility = json.loads(export_path.read_text())["image"]["compatibility"]
+    assert compatibility["status"] == "unverified"
+    assert compatibility["problems"] == []
+
+
+def test_a_schema_json_never_claims_matched(tmp_path, monkeypatch):
+    # A schema JSON records its own image hash, so agreeing with fetch.json is
+    # self-attestation; only bytes parsed from the image can support 'matched'.
+    output, snapshot = _fetched_with_snapshot(tmp_path, monkeypatch)
+    schema_path = tmp_path / "schema.json"
+    assert RUNNER.invoke(cli.app, [
+        "schema", str(output / "BIOS.CAP"), "-o", str(schema_path)]).exit_code == 0
+    export_path = tmp_path / "export.json"
+
+    result = RUNNER.invoke(cli.app, [
+        "export", "--schema", str(schema_path), "--snapshot", str(snapshot),
+        "--provenance", str(output / "fetch.json"), "-o", str(export_path)])
+
+    assert result.exit_code == 0, result.output
+    compatibility = json.loads(export_path.read_text())["image"]["compatibility"]
+    assert compatibility["status"] == "unverified"
+    assert "image SHA-256 recorded in the schema matches fetch.json" in (
+        compatibility["evidence"])
 
 
 def test_provenance_for_a_different_image_is_a_mismatch(tmp_path, monkeypatch):

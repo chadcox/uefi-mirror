@@ -20,6 +20,21 @@ All notable changes to `uefi-mirror` are documented here.
 
 ### Changed
 
+- **`export` can report `matched`.** When a current-format `fetch.json` from
+  `uefi-mirror fetch` is checked against the export — the copy beside the image
+  by default, or `--provenance PATH` — and all three of the parsed image's
+  SHA-256, the fetched model, and the fetched BIOS version agree with the image
+  bytes and the machine's board/product name and BIOS version, compatibility
+  rises from `unverified` to `matched` and prints in green. A comparison that
+  cannot be made — a record or a machine missing either side, or a schema loaded
+  from JSON, whose recorded image hash is self-attestation — keeps the status at
+  `unverified`; disagreement is still `mismatch`. `matched` is provenance
+  agreement between `fetch` and `export`, not proof of what is flashed: `fetch`
+  still records `installed_firmware_identity: "unverified"`, and
+  `check_compatibility` itself never emits `matched`. This is the status the 1.0
+  vocabulary change left reserved, now reachable only through recorded
+  provenance. Export format stays 3; scripts reading `image.compatibility.status`
+  may now see a third value.
 - **One process-launch helper.** `safety.run_readonly_tool` is the only code
   that starts a process. It accepts exactly three argument lists
   (`fwupdmgr --version`, `fwupdmgr security --json`,
