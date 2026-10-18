@@ -158,7 +158,7 @@ def _check_image(schema_result, store: decode.VariableStore, image: bytes | None
         try:
             data = read_bounded(provenance, MAX_VARIABLE_BYTES)
             sha = schema_result.image.get("file_sha256")
-            evidence, problems = fetch_mod.provenance_evidence(
+            evidence, problems, provenance_agrees = fetch_mod.provenance_evidence(
                 data, sha if isinstance(sha, str) else "",
                 "computed from the image" if image is not None else "recorded in the schema",
                 dmi)
@@ -168,13 +168,21 @@ def _check_image(schema_result, store: decode.VariableStore, image: bytes | None
         result.problems.extend(problems)
         if result.problems:
             result.status = "mismatch"
+        elif provenance_agrees and image is not None:
+            # A fetch.json proves only that this image is the one fetch downloaded
+            # for this board and BIOS version. Only an image parsed from bytes
+            # supports that: a schema JSON's own recorded hash could be copied.
+            result.status = "matched"
+            result.evidence.append(
+                "fetch.json provenance matches this image and this machine, so the "
+                "image is the release uefi-mirror fetched for it")
     prefix = f"{label}: " if label else ""
     detail = "; ".join(result.problems or result.evidence)
     if result.status == "mismatch" and not allow_mismatch:
         raise typer.BadParameter(
             f"{prefix}schema does not match this machine's variable layout: {detail}; "
             "use --allow-mismatch to inspect it anyway")
-    style = "red" if result.status == "mismatch" else "yellow"
+    style = {"mismatch": "red", "matched": "green"}.get(result.status, "yellow")
     console.print(f"[{style}]schema compatibility: {prefix}{result.status}[/] ({detail})")
     return result
 
@@ -563,8 +571,8 @@ def export(
         False, "--require-complete", help="Refuse a schema with parser warnings."),
     provenance: str = typer.Option(
         None, "--provenance",
-        help="Compare with a fetch.json from 'uefi-mirror fetch' (evidence only). "
-             "Default: fetch.json beside the image, if present."),
+        help="Compare with a fetch.json from 'uefi-mirror fetch'; a full agreement "
+             "reports 'matched'. Default: fetch.json beside the image, if present."),
     limit: int = typer.Option(40, "--limit", min=0, help="Rows to print; 0 for all."),
     efivars: str = typer.Option(platform.EFIVARS_DIR, "--efivars", hidden=True),
 ) -> None:
